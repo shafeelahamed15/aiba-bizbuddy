@@ -8,26 +8,23 @@ import ChatBot from './components/ChatBot';
 import BusinessSetupChat from './components/BusinessSetupChat';
 import './App.css';
 
-function App() {
+export default function App() {
   const { currentUser } = useAuth();
-  const [businessInfo, setBusinessInfo] = useState(null);
+  const [hasBusinessInfo, setHasBusinessInfo] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const checkBusinessInfo = async () => {
+    const fetchInfo = async () => {
       if (!currentUser) {
         setLoading(false);
         return;
       }
-      const docRef = doc(db, 'users', currentUser.uid, 'business', 'info');
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        setBusinessInfo(docSnap.data());
-      }
+      const ref = doc(db, 'users', currentUser.uid, 'business', 'info');
+      const snap = await getDoc(ref);
+      setHasBusinessInfo(snap.exists());
       setLoading(false);
     };
-
-    checkBusinessInfo();
+    fetchInfo();
   }, [currentUser]);
 
   if (loading) {
@@ -42,8 +39,8 @@ function App() {
         element={
           !currentUser ? (
             <Navigate to="/login" />
-          ) : businessInfo ? (
-            <ChatBot businessInfo={businessInfo} />
+          ) : hasBusinessInfo ? (
+            <ChatBot />
           ) : (
             <BusinessSetupChat />
           )
@@ -52,6 +49,4 @@ function App() {
       <Route path="/" element={<Navigate to={currentUser ? "/chat" : "/login"} />} />
     </Routes>
   );
-}
-
-export default App; 
+} 
