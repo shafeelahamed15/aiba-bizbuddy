@@ -41,9 +41,19 @@ function classifyUserInput(message) {
     "create quote", "create quotation", "generate quotation", "new quotation"
   ];
 
+  // Check for purchase order creation commands
+  const purchaseOrderCommands = [
+    "create purchase order", "create po", "new purchase order", "new po", "purchase order", "generate po"
+  ];
+
   // Priority-based classification
   
-  // 1. Check for quotation creation commands first (highest priority)
+  // 1. Check for purchase order creation commands first (highest priority)
+  if (purchaseOrderCommands.some(command => text.includes(command))) {
+    return "purchase_order_create";
+  }
+  
+  // 2. Check for quotation creation commands (second highest priority)
   if (quotationCommands.some(command => text.includes(command))) {
     return "quotation_create";
   }
@@ -100,6 +110,15 @@ function handleChatResponse(userMessage, currentContext = {}) {
         showPDFButtons: false,
         requiresProcessing: true,
         processingType: "knowledge"
+      };
+
+    case "purchase_order_create":
+      return {
+        type: "purchase_order_create",
+        reply: null, // Will be handled by purchase order flow
+        showPDFButtons: false,
+        requiresProcessing: true,
+        processingType: "purchase_order_create"
       };
 
     case "quotation_create":
@@ -663,6 +682,46 @@ export default function ChatBot() {
     'confirmation'
   ];
 
+  // Purchase Order Flow State
+  const [purchaseOrderFlow, setPurchaseOrderFlow] = useState({
+    active: false,
+    step: 0,
+    data: {
+      supplier: {
+        name: '',
+        address: '',
+        gstin: ''
+      },
+      voucherNumber: '',
+      referenceNumber: '',
+      referenceDate: '',
+      dispatch: '',
+      paymentTerms: '',
+      otherReferences: '',
+      destination: '',
+      deliveryTerms: '',
+      items: [],
+      currentItem: { description: '', qty: '', unit: '', rate: '', amount: '' },
+      gstRate: 18
+    },
+    pendingGeneration: false
+  });
+
+  const purchaseOrderSteps = [
+    'supplier',
+    'voucherNumber',
+    'referenceNumber',
+    'referenceDate',
+    'dispatch',
+    'paymentTerms',
+    'otherReferences',
+    'destination',
+    'deliveryTerms',
+    'items',
+    'gstRate',
+    'confirmation'
+  ];
+
   // Fetch business info function
   const fetchBusinessInfo = async () => {
     if (!currentUser) return;
@@ -838,6 +897,240 @@ export default function ChatBot() {
     frequentCustomers: [],
     showSuggestions: false
   });
+
+  // Purchase Order Flow Functions
+  const startPurchaseOrderFlow = () => {
+    setPurchaseOrderFlow({
+      active: true,
+      step: 0,
+      data: {
+        supplier: { name: '', address: '', gstin: '' },
+        voucherNumber: '',
+        referenceNumber: '',
+        referenceDate: '',
+        dispatch: '',
+        paymentTerms: '',
+        otherReferences: '',
+        destination: '',
+        deliveryTerms: '',
+        items: [],
+        currentItem: { description: '', qty: '', unit: '', rate: '', amount: '' },
+        gstRate: 18
+      },
+      pendingGeneration: false
+    });
+
+    setMessages(prev => [...prev, {
+      type: 'bot',
+      text: '🛒 **Purchase Order Creation Started**\n\nGreat! Let\'s create a Purchase Order.\n\n**Step 1:** Who is the supplier (Bill From)?\nPlease provide:\n• Supplier Name\n• Address\n• GSTIN (if available)'
+    }]);
+  };
+
+  const getPOStepPrompt = (step) => {
+    const prompts = {
+      0: '🏢 **Supplier Information**\nWho is the supplier (Bill From)?\nPlease provide:\n• Supplier Name\n• Address\n• GSTIN (if available)',
+      1: '📄 **Voucher Number**\nWhat is the voucher number for this purchase order?',
+      2: '🔗 **Reference Details**\nWhat is the reference number and date?\n(Example: REF001, 2024-01-15)',
+      3: '🚚 **Dispatch Information**\nHow is it dispatched?\n(Example: By Road, By Rail, Courier, etc.)',
+      4: '💳 **Payment Terms**\nWhat is the mode/terms of payment?\n(Example: Cash, Bank Transfer, Credit 30 days, etc.)',
+      5: '📋 **Other References**\nAny other references?\n(Optional - you can skip by typing "none" or "skip")',
+      6: '📍 **Destination**\nWhat is the destination address?',
+      7: '📦 **Delivery Terms**\nWhat are the terms of delivery?\n(Example: FOB, CIF, Door delivery, etc.)',
+      8: '📝 **Items**\nPlease enter the item details:\n• Description\n• Quantity\n• Unit (MT, KG, PCS, etc.)\n• Rate per unit\n\n(You can add multiple items)',
+      9: '💰 **GST Rate**\nWhat is the GST rate? (Default: 18%)',
+      10: '✅ **Confirmation**\nReady to generate Purchase Order PDF?'
+    };
+    return prompts[step] || 'Please provide the required information.';
+  };
+
+  const handlePurchaseOrderFlow = async (userInput) => {
+    const step = purchaseOrderFlow.step;
+    const currentData = { ...purchaseOrderFlow.data };
+    let nextStep = step + 1;
+    let responseText = '';
+
+    switch (step) {
+      case 0: // Supplier info
+        const supplierText = userInput.trim();
+        const lines = supplierText.split('\n').map(line => line.trim()).filter(line => line);
+        
+        currentData.supplier.name = lines[0] || supplierText;
+        if (lines.length > 1) {
+          currentData.supplier.address = lines.slice(1, -1).join('\n');
+          // Check if last line looks like GSTIN
+          const lastLine = lines[lines.length - 1];
+          if (lastLine.match(/\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}/)) {
+            currentData.supplier.gstin = lastLine;
+          } else {
+            currentData.supplier.address = lines.slice(1).join('\n');
+          }
+        }
+        responseText = `✅ **Supplier Noted:**\n**Name:** ${currentData.supplier.name}\n**Address:** ${currentData.supplier.address}\n**GSTIN:** ${currentData.supplier.gstin || 'Not provided'}\n\n${getPOStepPrompt(nextStep)}`;
+        break;
+
+      case 1: // Voucher number
+        currentData.voucherNumber = userInput.trim();
+        responseText = `✅ **Voucher Number:** ${currentData.voucherNumber}\n\n${getPOStepPrompt(nextStep)}`;
+        break;
+
+      case 2: // Reference number and date
+        currentData.referenceNumber = userInput.trim();
+        responseText = `✅ **Reference:** ${currentData.referenceNumber}\n\n${getPOStepPrompt(nextStep)}`;
+        break;
+
+      case 3: // Dispatch
+        currentData.dispatch = userInput.trim();
+        responseText = `✅ **Dispatch:** ${currentData.dispatch}\n\n${getPOStepPrompt(nextStep)}`;
+        break;
+
+      case 4: // Payment terms
+        currentData.paymentTerms = userInput.trim();
+        responseText = `✅ **Payment Terms:** ${currentData.paymentTerms}\n\n${getPOStepPrompt(nextStep)}`;
+        break;
+
+      case 5: // Other references
+        const otherRef = userInput.trim().toLowerCase();
+        if (otherRef === 'none' || otherRef === 'skip' || otherRef === '') {
+          currentData.otherReferences = '';
+          responseText = `✅ **Other References:** Skipped\n\n${getPOStepPrompt(nextStep)}`;
+        } else {
+          currentData.otherReferences = userInput.trim();
+          responseText = `✅ **Other References:** ${currentData.otherReferences}\n\n${getPOStepPrompt(nextStep)}`;
+        }
+        break;
+
+      case 6: // Destination
+        currentData.destination = userInput.trim();
+        responseText = `✅ **Destination:** ${currentData.destination}\n\n${getPOStepPrompt(nextStep)}`;
+        break;
+
+      case 7: // Delivery terms
+        currentData.deliveryTerms = userInput.trim();
+        responseText = `✅ **Delivery Terms:** ${currentData.deliveryTerms}\n\n${getPOStepPrompt(nextStep)}`;
+        break;
+
+      case 8: // Items
+        const itemInput = userInput.trim().toLowerCase();
+        
+        if (itemInput === 'done' || itemInput === 'finish' || itemInput === 'complete') {
+          if (currentData.items.length === 0) {
+            responseText = '❌ **No items added yet!**\nPlease add at least one item before proceeding.\n\n' + getPOStepPrompt(step);
+            nextStep = step; // Stay on current step
+            break;
+          }
+          responseText = `✅ **Items completed!** (${currentData.items.length} items added)\n\n${getPOStepPrompt(nextStep)}`;
+        } else {
+          // Parse item input
+          const itemLines = userInput.split('\n').map(line => line.trim()).filter(line => line);
+          let description = '', qty = '', unit = '', rate = '';
+          
+          // Simple parsing - try to extract from format like "TMT 12mm - 5 MT @ 58000"
+          const itemMatch = userInput.match(/^(.+?)\s*-?\s*(\d+(?:\.\d+)?)\s*(\w+)\s*@?\s*(\d+(?:\.\d+)?)/i);
+          
+          if (itemMatch) {
+            description = itemMatch[1].trim();
+            qty = parseFloat(itemMatch[2]);
+            unit = itemMatch[3].toUpperCase();
+            rate = parseFloat(itemMatch[4]);
+          } else {
+            // Fallback: ask for structured input
+            description = userInput;
+            qty = 1;
+            unit = 'PCS';
+            rate = 0;
+          }
+          
+          const amount = qty * rate;
+          
+          const newItem = {
+            description,
+            qty,
+            unit,
+            rate,
+            amount
+          };
+          
+          currentData.items.push(newItem);
+          
+          responseText = `✅ **Item ${currentData.items.length} added:**\n• **Description:** ${description}\n• **Quantity:** ${qty} ${unit}\n• **Rate:** ₹${rate.toLocaleString('en-IN')}\n• **Amount:** ₹${amount.toLocaleString('en-IN')}\n\n**Add another item** or type "**done**" to proceed.`;
+          nextStep = step; // Stay on current step for more items
+        }
+        break;
+
+      case 9: // GST Rate
+        const gstInput = userInput.trim();
+        const gstMatch = gstInput.match(/(\d+(?:\.\d+)?)/);
+        if (gstMatch) {
+          currentData.gstRate = parseFloat(gstMatch[1]);
+        } else {
+          currentData.gstRate = 18; // Default
+        }
+        responseText = `✅ **GST Rate:** ${currentData.gstRate}%\n\n${getPOStepPrompt(nextStep)}`;
+        break;
+
+      case 10: // Confirmation
+        const confirmInput = userInput.trim().toLowerCase();
+        if (confirmInput.includes('yes') || confirmInput.includes('generate') || confirmInput.includes('create')) {
+          responseText = '🔄 **Generating Purchase Order PDF...**';
+          nextStep = step; // Don't increment, we'll handle PDF generation
+          
+          // Generate PDF
+          setTimeout(async () => {
+            try {
+              await generatePurchaseOrderPDF(currentData);
+              setMessages(prev => [...prev, {
+                type: 'bot',
+                text: '✅ **Purchase Order PDF Generated Successfully!**\n\nYour purchase order has been created and downloaded.\n\nWhat would you like to do next?'
+              }]);
+              
+              // Reset PO flow
+              setPurchaseOrderFlow({
+                active: false,
+                step: 0,
+                data: {
+                  supplier: { name: '', address: '', gstin: '' },
+                  voucherNumber: '',
+                  referenceNumber: '',
+                  referenceDate: '',
+                  dispatch: '',
+                  paymentTerms: '',
+                  otherReferences: '',
+                  destination: '',
+                  deliveryTerms: '',
+                  items: [],
+                  currentItem: { description: '', qty: '', unit: '', rate: '', amount: '' },
+                  gstRate: 18
+                },
+                pendingGeneration: false
+              });
+            } catch (error) {
+              console.error('Error generating PO PDF:', error);
+              setMessages(prev => [...prev, {
+                type: 'bot',
+                text: '❌ **Error generating Purchase Order PDF**\n\nPlease try again or contact support if the issue persists.'
+              }]);
+            }
+          }, 1000);
+        } else {
+          responseText = '📝 **Edit Mode**\nWhat would you like to modify?\n• Supplier details\n• Items\n• Payment terms\n• Or type "generate" to proceed with PDF creation';
+          nextStep = step; // Stay on confirmation
+        }
+        break;
+
+      default:
+        responseText = 'Please provide the required information.';
+        nextStep = step;
+    }
+
+    // Update the flow state
+    setPurchaseOrderFlow(prev => ({
+      ...prev,
+      step: nextStep,
+      data: currentData
+    }));
+
+    return responseText;
+  };
 
   // Handle customer name input with real-time suggestions
   const handleCustomerNameInput = async (input) => {
@@ -1756,6 +2049,295 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
     }).format(amount);
   };
 
+  // Purchase Order PDF Generation
+  const generatePurchaseOrderPDF = async (poData) => {
+    try {
+      if (!businessInfo) {
+        throw new Error('Business information not available');
+      }
+
+      const { jsPDF } = window.jspdf;
+      const pdfDoc = new jsPDF();
+
+      // Helper function to convert number to words
+      const numberToWords = (num) => {
+        const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+        const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+        const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+        const thousands = ['', 'Thousand', 'Lakh', 'Crore'];
+
+        if (num === 0) return 'Zero';
+
+        const convertHundreds = (n) => {
+          let result = '';
+          if (n > 99) {
+            result += ones[Math.floor(n / 100)] + ' Hundred ';
+            n %= 100;
+          }
+          if (n > 19) {
+            result += tens[Math.floor(n / 10)] + ' ';
+            n %= 10;
+          } else if (n > 9) {
+            result += teens[n - 10] + ' ';
+            n = 0;
+          }
+          if (n > 0) {
+            result += ones[n] + ' ';
+          }
+          return result;
+        };
+
+        let result = '';
+        let groupIndex = 0;
+        
+        while (num > 0) {
+          if (groupIndex === 0) {
+            const group = num % 1000;
+            if (group !== 0) {
+              result = convertHundreds(group) + thousands[groupIndex] + ' ' + result;
+            }
+            num = Math.floor(num / 1000);
+          } else {
+            const group = num % 100;
+            if (group !== 0) {
+              result = convertHundreds(group) + thousands[groupIndex] + ' ' + result;
+            }
+            num = Math.floor(num / 100);
+          }
+          groupIndex++;
+        }
+
+        return result.trim();
+      };
+
+      // Calculate totals
+      const subtotal = poData.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+      const gstAmount = subtotal * (poData.gstRate / 100);
+      const total = subtotal + gstAmount;
+      const totalQty = poData.items.reduce((sum, item) => sum + (item.qty || 0), 0);
+
+      // Set up the document
+      pdfDoc.setFont('helvetica');
+      
+      // Title
+      pdfDoc.setFontSize(18);
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('PURCHASE ORDER', 105, 20, { align: 'center' });
+      
+      // Company header (our business info)
+      let y = 35;
+      pdfDoc.setFontSize(14);
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text(businessInfo.businessName || 'Your Business Name', 14, y);
+      
+      y += 7;
+      pdfDoc.setFontSize(10);
+      pdfDoc.setFont('helvetica', 'normal');
+      if (businessInfo.address) {
+        const addressLines = pdfDoc.splitTextToSize(businessInfo.address, 80);
+        pdfDoc.text(addressLines, 14, y);
+        y += addressLines.length * 5;
+      }
+      
+      if (businessInfo.gstin) {
+        y += 3;
+        pdfDoc.text(`GSTIN: ${businessInfo.gstin}`, 14, y);
+        y += 5;
+      }
+      
+      if (businessInfo.email) {
+        pdfDoc.text(`Email: ${businessInfo.email}`, 14, y);
+        y += 5;
+      }
+
+      // PO Details (top right)
+      y = 35;
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('PO No:', 140, y);
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.text(poData.voucherNumber || 'PO001', 165, y);
+      
+      y += 7;
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('Date:', 140, y);
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.text(new Date().toLocaleDateString('en-GB'), 165, y);
+      
+      if (poData.referenceNumber) {
+        y += 7;
+        pdfDoc.setFont('helvetica', 'bold');
+        pdfDoc.text('Ref:', 140, y);
+        pdfDoc.setFont('helvetica', 'normal');
+        pdfDoc.text(poData.referenceNumber, 165, y);
+      }
+
+      // Three-column layout
+      y = 80;
+      
+      // Bill From (Supplier)
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('BILL FROM:', 14, y);
+      y += 7;
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.text(poData.supplier.name || 'Supplier Name', 14, y);
+      y += 5;
+      if (poData.supplier.address) {
+        const supplierLines = pdfDoc.splitTextToSize(poData.supplier.address, 60);
+        pdfDoc.text(supplierLines, 14, y);
+        y = Math.max(y + supplierLines.length * 5, y + 15);
+      }
+      if (poData.supplier.gstin) {
+        pdfDoc.text(`GSTIN: ${poData.supplier.gstin}`, 14, y);
+      }
+
+      // Ship To (same as our address)
+      let shipY = 80;
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('SHIP TO:', 75, shipY);
+      shipY += 7;
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.text(businessInfo.businessName || 'Your Business', 75, shipY);
+      shipY += 5;
+      if (businessInfo.address) {
+        const shipLines = pdfDoc.splitTextToSize(businessInfo.address, 60);
+        pdfDoc.text(shipLines, 75, shipY);
+      }
+
+      // Other details (right column)
+      let detailY = 80;
+      if (poData.dispatch) {
+        pdfDoc.setFont('helvetica', 'bold');
+        pdfDoc.text('Dispatch:', 140, detailY);
+        pdfDoc.setFont('helvetica', 'normal');
+        pdfDoc.text(poData.dispatch, 140, detailY + 7);
+        detailY += 14;
+      }
+      
+      if (poData.destination) {
+        pdfDoc.setFont('helvetica', 'bold');
+        pdfDoc.text('Destination:', 140, detailY);
+        pdfDoc.setFont('helvetica', 'normal');
+        const destLines = pdfDoc.splitTextToSize(poData.destination, 50);
+        pdfDoc.text(destLines, 140, detailY + 7);
+        detailY += 7 + destLines.length * 5;
+      }
+
+      // Items table
+      y = 130;
+      
+      // Table headers
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.setFillColor(240, 240, 240);
+      pdfDoc.rect(14, y - 5, 182, 12, 'F');
+      
+      pdfDoc.text('SL', 16, y);
+      pdfDoc.text('DESCRIPTION', 30, y);
+      pdfDoc.text('QTY', 120, y);
+      pdfDoc.text('UNIT', 135, y);
+      pdfDoc.text('RATE', 150, y);
+      pdfDoc.text('AMOUNT', 175, y);
+      
+      // Table border
+      pdfDoc.setDrawColor(0);
+      pdfDoc.rect(14, y - 5, 182, 12);
+      
+      y += 10;
+      pdfDoc.setFont('helvetica', 'normal');
+      
+      // Items
+      poData.items.forEach((item, index) => {
+        pdfDoc.text((index + 1).toString(), 16, y);
+        
+        const description = pdfDoc.splitTextToSize(item.description || '', 85);
+        pdfDoc.text(description, 30, y);
+        
+        pdfDoc.text(item.qty?.toString() || '0', 120, y);
+        pdfDoc.text(item.unit || 'PCS', 135, y);
+        pdfDoc.text('₹' + (item.rate || 0).toLocaleString('en-IN'), 150, y);
+        pdfDoc.text('₹' + (item.amount || 0).toLocaleString('en-IN'), 175, y);
+        
+        // Row border
+        pdfDoc.rect(14, y - 5, 182, Math.max(description.length * 5, 8));
+        
+        y += Math.max(description.length * 5, 8);
+      });
+
+      // Totals section
+      y += 10;
+      
+      // Total Quantity
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('Total Quantity:', 120, y);
+      pdfDoc.text(totalQty.toString(), 175, y);
+      y += 8;
+      
+      // Subtotal
+      pdfDoc.text('Subtotal:', 120, y);
+      pdfDoc.text('₹' + subtotal.toLocaleString('en-IN'), 175, y);
+      y += 8;
+      
+      // GST
+      pdfDoc.text(`GST (${poData.gstRate}%):`, 120, y);
+      pdfDoc.text('₹' + gstAmount.toLocaleString('en-IN'), 175, y);
+      y += 8;
+      
+      // Total
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('TOTAL:', 120, y);
+      pdfDoc.text('₹' + total.toLocaleString('en-IN'), 175, y);
+      y += 10;
+      
+      // Amount in words
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.text('Amount in Words:', 14, y);
+      y += 5;
+      pdfDoc.setFont('helvetica', 'bold');
+      const amountInWords = numberToWords(Math.floor(total)) + ' Rupees Only';
+      const wordsLines = pdfDoc.splitTextToSize(amountInWords, 180);
+      pdfDoc.text(wordsLines, 14, y);
+      y += wordsLines.length * 5 + 10;
+
+      // Terms and Conditions
+      if (poData.paymentTerms || poData.deliveryTerms) {
+        y += 5;
+        pdfDoc.setFont('helvetica', 'bold');
+        pdfDoc.text('TERMS & CONDITIONS:', 14, y);
+        y += 7;
+        pdfDoc.setFont('helvetica', 'normal');
+        
+        if (poData.paymentTerms) {
+          pdfDoc.text('• Payment Terms: ' + poData.paymentTerms, 14, y);
+          y += 5;
+        }
+        
+        if (poData.deliveryTerms) {
+          pdfDoc.text('• Delivery Terms: ' + poData.deliveryTerms, 14, y);
+          y += 5;
+        }
+      }
+
+      // Footer
+      y = 270;
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.text('Thank you for your business!', 14, y);
+      
+      // Signature
+      pdfDoc.text('Authorized Signature', 140, y + 15);
+      pdfDoc.line(140, y + 20, 190, y + 20);
+
+      // Save the PDF
+      const fileName = `Purchase_Order_${poData.voucherNumber || new Date().getTime()}.pdf`;
+      pdfDoc.save(fileName);
+      
+      console.log('✅ Purchase Order PDF generated successfully');
+      return true;
+      
+    } catch (error) {
+      console.error('Error generating Purchase Order PDF:', error);
+      throw error;
+    }
+  };
+
   const sendToOpenAI = async (userMessage) => {
     try {
       const messages = [
@@ -2180,6 +2762,21 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
         }
       }
       
+      // 🛒 PURCHASE ORDER CONTEXT GUARD - Handle PO Flow
+      if (purchaseOrderFlow.active) {
+        console.log('🛒 Purchase Order context active, processing input:', prompt);
+        
+        const poResponse = await handlePurchaseOrderFlow(prompt);
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: poResponse
+        }]);
+        
+        setPrompt('');
+        setIsLoading(false);
+        return;
+      }
+
       // 🛡️ QUOTATION CONTEXT GUARD - Highest Priority Check
       // Prevent fallback to general classification during quotation flow
       if (quotationFlow.active || quotationFlow.askingAboutExistingCustomer || 
@@ -2444,6 +3041,10 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       
       // Process different types based on intent result
       switch (intentResult.processingType) {
+        case "purchase_order_create":
+          startPurchaseOrderFlow();
+          break;
+          
         case "quotation_create":
           await startSmartCustomerSelection();
           break;
@@ -3282,7 +3883,7 @@ ${quotationData.products.map(p => `• ${p.description}: ${p.qty}kg @ ₹${p.rat
       )}
 
       {/* Quick Action Buttons */}
-      {!quotationFlow.active && !customerSelectionState.active && (
+      {!quotationFlow.active && !customerSelectionState.active && !purchaseOrderFlow.active && (
         <div className="mb-4 p-3 bg-gradient-to-r from-blue-50 to-green-50 rounded-lg border border-blue-200">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-blue-600">⚡</span>
@@ -3297,6 +3898,15 @@ ${quotationData.products.map(p => `• ${p.description}: ${p.qty}kg @ ₹${p.rat
               className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2"
             >
               📄 New Quotation
+            </button>
+            <button
+              onClick={() => {
+                setMessages(prev => [...prev, { type: 'user', text: 'create purchase order' }]);
+                startPurchaseOrderFlow();
+              }}
+              className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors flex items-center gap-2"
+            >
+              🛒 Create Purchase Order
             </button>
           </div>
         </div>
