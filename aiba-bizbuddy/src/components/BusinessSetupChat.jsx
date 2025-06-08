@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebaseconfig';
 import { useAuth } from '../context/AuthContext';
+import SettingsMenu from './SettingsMenu';
 
 const questions = [
   { key: 'businessName', label: 'What is your business name?' },
@@ -14,7 +15,8 @@ const questions = [
   { key: 'phone', label: 'What is your business phone number?' },
   { key: 'bankAccount', label: 'What is your business bank account number?' },
   { key: 'ifsc', label: 'What is your bank IFSC code?' },
-  { key: 'bankName', label: 'What is your bank name?' }
+  { key: 'bankName', label: 'What is your bank name?' },
+  { key: 'branch', label: 'What is your bank branch?' }
 ];
 
 export default function BusinessSetupChat() {
@@ -87,6 +89,9 @@ export default function BusinessSetupChat() {
 
   return (
     <div className="max-w-4xl mx-auto p-4 h-[calc(100vh-2rem)] flex flex-col">
+      {/* Settings Menu */}
+      <SettingsMenu />
+      
       <div className="flex-1 overflow-y-auto mb-4 space-y-4">
         {messages.map((message, index) => (
           <div

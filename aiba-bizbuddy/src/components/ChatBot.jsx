@@ -6,7 +6,568 @@ import { db } from '../firebaseconfig';
 import { useAuth } from '../context/AuthContext';
 import { savePromptHistory } from '../utils/promptLogger';
 import { parseQuotationPrompt } from '../utils/parseQuotationInput';
-import { validateQuotationData, getValidationMessage, validateMinimumQuotationData } from '../utils/validateQuotationInput';
+import { validateQuotationData, getValidationMessage, validateMinimumQuotationData, validateCriticalFields, getCriticalValidationMessage, applyFallbackDefaults } from '../utils/validateQuotationInput';
+import { parsePromptWithFallback, validateParsedData, formatParsedData } from '../utils/parsePrompt';
+import { calculateWeight, getWeightInfo, isValidItem, findSimilarItems } from '../utils/calculateWeight';
+import { detectGreeting, detectQuestion, detectQuotationRequest, generateSteelResponse } from '../utils/steelKnowledge';
+  import { routeIntent, validateAndEnrichContext } from '../utils/intentRouter';
+  import { handleChecklistQuotation, handleChecklistCommand, isChecklistCommand, exportChecklistData } from '../intents/handleChecklistQuotation';
+import promptParser from '../utils/promptParser';
+import chatbotStateManager from '../utils/chatbotStateManager';
+import suggestionManager from '../utils/suggestionManager.jsx';
+import SettingsMenu from './SettingsMenu';
+import CleanBusinessInfo from './CleanBusinessInfo';
+
+// 🧠 ADVANCED INPUT CLASSIFIER - Smarter than previous detection
+function classifyUserInput(message) {
+  const text = message.toLowerCase().trim();
+
+  // Casual conversation triggers
+  const casualTriggers = ["hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "sure", "fine", "great", "cool", "yo", "sup", "howdy"];
+  
+  // Question triggers
+  const questionTriggers = ["what", "how", "when", "can", "do", "is", "are", "why", "which", "where", "who"];
+  
+  // Quotation triggers (more comprehensive)
+  const quotationTriggers = [
+    "quote", "quotation", "estimate", "price", "rate", "cost",
+    "mt", "tonnes", "tons", "kg", "nos", "pcs", "pieces",
+    "ismb", "ismc", "isa", "tmt", "hr sheet", "cr sheet", "ms pipe",
+    "@", "+gst", "delivery", "transport"
+  ];
+
+  // Check for specific quotation creation commands
+  const quotationCommands = [
+    "create quote", "create quotation", "generate quotation", "new quotation"
+  ];
+
+  // Priority-based classification
+  
+  // 1. Check for quotation creation commands first (highest priority)
+  if (quotationCommands.some(command => text.includes(command))) {
+    return "quotation_create";
+  }
+  
+  // 2. Check for quotation requests (second priority)
+  if (
+    quotationTriggers.some(trigger => text.includes(trigger)) ||
+    text.match(/\d+\s?(nos|pcs|mt|tons?|kgs?|kg)/i) ||
+    text.match(/@\s?[\d.]+/) ||
+    text.includes("create quotation") ||
+    text.match(/to\s+[^,\n]+,/i)
+  ) {
+    return "quotation";
+  }
+  
+  // 2. Check for casual responses
+  if (casualTriggers.some(phrase => text === phrase || text.includes(phrase))) {
+    return "casual";
+  }
+  
+  // 3. Check for questions
+  if (
+    questionTriggers.some(word => text.startsWith(word)) || 
+    text.endsWith("?") ||
+    text.includes("difference") ||
+    text.includes("tell me") ||
+    text.includes("explain")
+  ) {
+    return "question";
+  }
+
+  return "unknown";
+}
+
+// 🎯 MAIN CHAT RESPONSE HANDLER - Controls conversation flow
+function handleChatResponse(userMessage, currentContext = {}) {
+  const messageType = classifyUserInput(userMessage);
+  
+  console.log(`🎯 Classified "${userMessage}" as: ${messageType}`);
+
+  switch (messageType) {
+    case "casual":
+      return {
+        type: "casual",
+        reply: getRandomCasualResponse(),
+        showPDFButtons: false,
+        requiresProcessing: false
+      };
+
+    case "question":
+      return {
+        type: "question", 
+        reply: null, // Will be handled by steel knowledge system
+        showPDFButtons: false,
+        requiresProcessing: true,
+        processingType: "knowledge"
+      };
+
+    case "quotation_create":
+      return {
+        type: "quotation_create",
+        reply: null, // Will be handled by smart customer selection
+        showPDFButtons: false,
+        requiresProcessing: true,
+        processingType: "quotation_create"
+      };
+
+    case "quotation":
+      return {
+        type: "quotation",
+        reply: null, // Will be handled by quotation system
+        showPDFButtons: false, // Will be set after successful parsing
+        requiresProcessing: true,
+        processingType: "quotation"
+      };
+
+    default:
+      return {
+        type: "unknown",
+        reply: "I'm ready to help! You can:\n• Create quotations for steel products\n• Ask questions about steel types and specifications\n• Get market insights and business advice\n\nWhat would you like to do?",
+        showPDFButtons: false,
+        requiresProcessing: false
+      };
+  }
+}
+
+// 💬 Natural casual responses
+function getRandomCasualResponse() {
+  const responses = [
+    "Hey there! 😊 Ready to help with your steel business needs.",
+    "Hello! How can I assist you with quotations or steel questions today?",
+    "Hi! I'm here to help with steel trading, quotations, and product info.",
+    "Great to hear from you! Need a quotation or have steel-related questions?",
+    "Hello! Let me know if you'd like to create quotations or learn about steel products.",
+    "Hey! Ready to help with steel quotations, rates, or product specifications."
+  ];
+  
+  return responses[Math.floor(Math.random() * responses.length)];
+}
+
+// 🛠️ EDIT MODE FUNCTIONALITY
+
+// Edit command parser - extracts intent and parameters from natural language
+function parseEditCommand(command) {
+  const text = command.toLowerCase().trim();
+  
+  console.log('🛠️ Parsing edit command:', text);
+  
+  // Customer details updates - more flexible patterns
+  if (text.includes('change') && text.includes('customer')) {
+    console.log('🔍 Detected change customer pattern');
+    const nameMatch = text.match(/change\s+customer\s+(?:name\s+)?(?:to\s+)?(.+)$/i) || 
+                     text.match(/customer\s+(?:name\s+)?(?:to\s+)?(.+)$/i);
+    if (nameMatch) {
+      console.log('✅ Customer name match found:', nameMatch[1]);
+      return {
+        type: 'customer',
+        action: 'update_name',
+        value: nameMatch[1].trim()
+      };
+    }
+  }
+  
+  // More flexible customer name patterns
+  if ((text.includes('update') || text.includes('set')) && text.includes('customer')) {
+    console.log('🔍 Detected update/set customer pattern');
+    const nameMatch = text.match(/(?:update|set)\s+customer\s+(?:name\s+)?(?:to\s+)?(.+)$/i);
+    if (nameMatch) {
+      console.log('✅ Customer name match found:', nameMatch[1]);
+      return {
+        type: 'customer',
+        action: 'update_name',
+        value: nameMatch[1].trim()
+      };
+    }
+  }
+  
+  // Handle "change name to [value]" without requiring "customer" keyword
+  if (text.includes('change') && text.includes('name') && text.includes('to')) {
+    console.log('🔍 Detected change name pattern');
+    const nameMatch = text.match(/change\s+(?:customer\s+)?name\s+to\s+(.+)$/i);
+    if (nameMatch) {
+      console.log('✅ Customer name match found:', nameMatch[1]);
+      return {
+        type: 'customer',
+        action: 'update_name',
+        value: nameMatch[1].trim()
+      };
+    } else {
+      // Fallback when pattern detected but no name extracted
+      console.log('⚠️ Change name pattern detected but no name extracted');
+      return {
+        type: 'customer',
+        action: 'request_name',
+        value: null
+      };
+    }
+  }
+  
+  // Handle "update name to [value]" and "set name to [value]"
+  if ((text.includes('update') || text.includes('set')) && text.includes('name') && text.includes('to')) {
+    console.log('🔍 Detected update/set name pattern');
+    const nameMatch = text.match(/(?:update|set)\s+(?:customer\s+)?name\s+to\s+(.+)$/i);
+    if (nameMatch) {
+      console.log('✅ Customer name match found:', nameMatch[1]);
+      return {
+        type: 'customer',
+        action: 'update_name',
+        value: nameMatch[1].trim()
+      };
+    } else {
+      // Fallback when pattern detected but no name extracted
+      console.log('⚠️ Update/set name pattern detected but no name extracted');
+      return {
+        type: 'customer',
+        action: 'request_name',
+        value: null
+      };
+    }
+  }
+  
+  if (text.includes('address')) {
+    const addressMatch = text.match(/(?:change|update|set)\s+address\s+(?:to\s+)?(.+)$/i);
+    if (addressMatch) {
+      return {
+        type: 'customer', 
+        action: 'update_address',
+        value: addressMatch[1].trim()
+      };
+    }
+  }
+  
+  if (text.includes('gstin')) {
+    const gstinMatch = text.match(/(?:change|update|set)\s+gstin\s+(?:to\s+)?([^\s,\n]+)/i);
+    if (gstinMatch) {
+      return {
+        type: 'customer',
+        action: 'update_gstin', 
+        value: gstinMatch[1].trim()
+      };
+    }
+  }
+  
+  // Product modifications - much more flexible patterns
+  if (text.includes('add') && (text.includes('item') || text.includes('product') || text.includes('tmt') || text.includes('ismb') || text.includes('steel'))) {
+    console.log('🔍 Detected add item command');
+    
+    // Pattern 1: "Add item: ISMB 150 - 5MT @ 58+GST"
+    let itemMatch = text.match(/add.*?(?:item|product)?:?\s*([^@]+)\s*@\s*([\d.]+)/i);
+    
+    if (itemMatch) {
+      const description = itemMatch[1].trim();
+      const rate = parseFloat(itemMatch[2]);
+      
+      // Extract quantity from description
+      const qtyMatch = description.match(/([\d.]+)\s*(?:MT|kg|nos)/i);
+      const qty = qtyMatch ? parseFloat(qtyMatch[1]) * (description.toLowerCase().includes('mt') ? 1000 : 1) : 1000;
+      
+      return {
+        type: 'product',
+        action: 'add',
+        value: {
+          description: description.replace(/\s*-\s*[\d.]+\s*(?:MT|kg|nos)/i, '').trim(),
+          qty,
+          rate,
+          amount: qty * rate
+        }
+      };
+    }
+    
+    // Pattern 2: "add item TMT 2x10" (no rate specified)
+    itemMatch = text.match(/add.*?(?:item\s+)?(.+)$/i);
+    if (itemMatch) {
+      const description = itemMatch[1].trim();
+      
+      // Try to extract dimensions or quantity
+      const qtyMatch = description.match(/([\d.]+)\s*(?:MT|kg|nos|mm|x)/i);
+      const qty = qtyMatch ? parseFloat(qtyMatch[1]) * 1000 : 5000; // Default 5MT if no quantity
+      
+      return {
+        type: 'product',
+        action: 'add',
+        value: {
+          description: description,
+          qty,
+          rate: 55, // Default rate
+          amount: qty * 55
+        }
+      };
+    }
+  }
+  
+  if (text.includes('remove') && (text.includes('last') || text.includes('product') || text.includes('item'))) {
+    return {
+      type: 'product',
+      action: 'remove_last'
+    };
+  }
+  
+  if (text.includes('update') && text.includes('price')) {
+    const priceMatch = text.match(/update\s+price\s+of\s+([^t]+)\s+to\s+[₹]?([\d.]+)/i);
+    if (priceMatch) {
+      return {
+        type: 'product',
+        action: 'update_price',
+        description: priceMatch[1].trim(),
+        value: parseFloat(priceMatch[2])
+      };
+    }
+  }
+  
+  if (text.includes('replace') && text.includes('item')) {
+    const replaceMatch = text.match(/replace\s+(first|last|\d+).*?with\s+([^@]+)\s*@\s*([\d.]+)/i);
+    if (replaceMatch) {
+      const position = replaceMatch[1];
+      const description = replaceMatch[2].trim();
+      const rate = parseFloat(replaceMatch[3]);
+      
+      const qtyMatch = description.match(/([\d.]+)\s*(?:MT|kg|nos)/i);
+      const qty = qtyMatch ? parseFloat(qtyMatch[1]) * (description.toLowerCase().includes('mt') ? 1000 : 1) : 1000;
+      
+      return {
+        type: 'product',
+        action: 'replace',
+        position: position === 'first' ? 0 : position === 'last' ? -1 : parseInt(position) - 1,
+        value: {
+          description: description.replace(/\s*-\s*[\d.]+\s*(?:MT|kg|nos)/i, '').trim(),
+          qty,
+          rate,
+          amount: qty * rate
+        }
+      };
+    }
+  }
+  
+  // Terms and charges - more flexible GST parsing
+  if ((text.includes('update') || text.includes('change') || text.includes('set')) && text.includes('gst')) {
+    const gstMatch = text.match(/(?:update|set|change)\s+gst\s+(?:to\s+)?([\d.]+)%?/i);
+    if (gstMatch) {
+      return {
+        type: 'terms',
+        action: 'update_gst',
+        value: parseFloat(gstMatch[1])
+      };
+    }
+  }
+  
+  if (text.includes('loading charges') || text.includes('loading charge')) {
+    const loadingMatch = text.match(/(?:add|set|change|update)\s+loading\s+charges?\s+(?:to\s+)?(.+)$/i);
+    if (loadingMatch) {
+      return {
+        type: 'terms',
+        action: 'update_loading',
+        value: loadingMatch[1].trim()
+      };
+    }
+  }
+  
+  if (text.includes('transport')) {
+    const transportMatch = text.match(/(?:change|set|update)\s+transport\s+(?:to\s+)?(.+)$/i);
+    if (transportMatch) {
+      return {
+        type: 'terms',
+        action: 'update_transport',
+        value: transportMatch[1].trim()
+      };
+    }
+  }
+  
+  if (text.includes('payment')) {
+    const paymentMatch = text.match(/(?:set|change|update)\s+payment\s+(?:terms?\s+)?(?:to\s+)?(.+)$/i);
+    if (paymentMatch) {
+      return {
+        type: 'terms',
+        action: 'update_payment',
+        value: paymentMatch[1].trim()
+      };
+    }
+  }
+  
+  // Meta commands - more flexible patterns
+  if ((text.includes('show') || text.includes('display')) && (text.includes('draft') || text.includes('quotation') || text.includes('current'))) {
+    return {
+      type: 'meta',
+      action: 'show_draft'
+    };
+  }
+  
+  if (text.includes('reset')) {
+    return {
+      type: 'meta',
+      action: 'reset'
+    };
+  }
+  
+  if ((text.includes('done') || text.includes('finished') || text.includes('complete') || text.includes('finish')) && 
+      !text.includes('not done')) {
+    return {
+      type: 'meta',
+      action: 'finalize'
+    };
+  }
+  
+  // Just "done" by itself
+  if (text === 'done' || text === 'finish' || text === 'complete') {
+    return {
+      type: 'meta',
+      action: 'finalize'
+    };
+  }
+  
+  console.log('❌ No edit command pattern matched');
+  return {
+    type: 'unknown',
+    action: 'unknown'
+  };
+}
+
+// Apply edit command to quotation data
+function applyEditToQuotation(quotationData, editCommand) {
+  const updatedData = { ...quotationData };
+  let confirmationMessage = '';
+  
+  switch (editCommand.type) {
+    case 'customer':
+      switch (editCommand.action) {
+        case 'update_name':
+          updatedData.customerName = editCommand.value;
+          confirmationMessage = `✅ Customer name updated to: **${editCommand.value}**`;
+          break;
+        case 'update_address':
+          updatedData.customerAddress = editCommand.value;
+          confirmationMessage = `✅ Updated customer address to: **${editCommand.value}**`;
+          break;
+        case 'update_gstin':
+          updatedData.customerGstin = editCommand.value;
+          confirmationMessage = `✅ Updated customer GSTIN to: **${editCommand.value}**`;
+          break;
+      }
+      break;
+      
+    case 'product':
+      switch (editCommand.action) {
+        case 'add':
+          updatedData.products = [...updatedData.products, editCommand.value];
+          confirmationMessage = `✅ Added new product: **${editCommand.value.description}** - ${editCommand.value.qty}kg @ ₹${editCommand.value.rate}`;
+          break;
+          
+        case 'remove_last':
+          if (updatedData.products.length > 0) {
+            const removedProduct = updatedData.products.pop();
+            confirmationMessage = `✅ Removed product: **${removedProduct.description}**`;
+          } else {
+            confirmationMessage = `❌ No products to remove`;
+          }
+          break;
+          
+        case 'update_price':
+          const productIndex = updatedData.products.findIndex(p => 
+            p.description.toLowerCase().includes(editCommand.description.toLowerCase())
+          );
+          if (productIndex !== -1) {
+            updatedData.products[productIndex].rate = editCommand.value;
+            updatedData.products[productIndex].amount = updatedData.products[productIndex].qty * editCommand.value;
+            confirmationMessage = `✅ Updated **${updatedData.products[productIndex].description}** price to ₹${editCommand.value}`;
+          } else {
+            confirmationMessage = `❌ Product "${editCommand.description}" not found`;
+          }
+          break;
+          
+        case 'replace':
+          const replaceIndex = editCommand.position === -1 ? updatedData.products.length - 1 : editCommand.position;
+          if (replaceIndex >= 0 && replaceIndex < updatedData.products.length) {
+            const oldProduct = updatedData.products[replaceIndex];
+            updatedData.products[replaceIndex] = editCommand.value;
+            confirmationMessage = `✅ Replaced **${oldProduct.description}** with **${editCommand.value.description}**`;
+          } else {
+            confirmationMessage = `❌ Invalid product position`;
+          }
+          break;
+      }
+      break;
+      
+    case 'terms':
+      switch (editCommand.action) {
+        case 'update_loading':
+          updatedData.loadingCharges = editCommand.value;
+          confirmationMessage = `✅ Updated loading charges to: **${editCommand.value}**`;
+          break;
+        case 'update_transport':
+          updatedData.transport = editCommand.value;
+          confirmationMessage = `✅ Updated transport to: **${editCommand.value}**`;
+          break;
+        case 'update_payment':
+          updatedData.paymentTerms = editCommand.value;
+          confirmationMessage = `✅ Updated payment terms to: **${editCommand.value}**`;
+          break;
+        case 'update_gst':
+          updatedData.gst = editCommand.value;
+          confirmationMessage = `✅ Updated GST to: **${editCommand.value}%**`;
+          break;
+      }
+      break;
+      
+    case 'meta':
+      // Meta commands don't modify data, just return current state
+      confirmationMessage = editCommand.action;
+      break;
+      
+    default:
+      confirmationMessage = `❌ I didn't understand that edit command. Here are some examples:
+
+**Customer Updates:**
+• "Change customer name to ABC Corp"
+• "Update address to 123 Main St, Chennai"
+
+**Add Products:**
+• "Add item: TMT 12mm - 5MT @ 58+GST"
+• "Add item ISMB 150 - 3MT @ 65+GST"
+
+**Update Terms:**
+• "Update GST to 12%"
+• "Change transport to INCLUDED"
+
+**Meta Commands:**
+• "Show current draft"
+• "Done" (to finalize)
+
+Try one of these formats!`;
+  }
+  
+  return {
+    updatedData,
+    confirmationMessage
+  };
+}
+
+// Generate current quotation draft summary
+function generateDraftSummary(quotationData) {
+  const totalAmount = quotationData.products.reduce((sum, item) => sum + item.amount, 0);
+  const validGst = typeof quotationData.gst === 'number' && !isNaN(quotationData.gst) && quotationData.gst >= 0 ? quotationData.gst : 18;
+  const gstAmount = totalAmount * (validGst / 100);
+  const grandTotal = totalAmount + gstAmount;
+  
+  return `📋 **Current Quotation Draft**
+
+**Customer:** ${quotationData.customerName}
+${quotationData.customerAddress ? `**Address:** ${quotationData.customerAddress}\n` : ''}${quotationData.customerGstin ? `**GSTIN:** ${quotationData.customerGstin}\n` : ''}
+**Products:**
+${quotationData.products.map((p, index) => `${index + 1}. ${p.description}: ${p.qty}kg @ ₹${p.rate} = ₹${p.amount.toLocaleString()}`).join('\n')}
+
+**Terms:**
+• GST: ${validGst}%
+• Transport: ${quotationData.transport || 'Not specified'}
+• Loading Charges: ${quotationData.loadingCharges || 'Not specified'}
+• Payment Terms: ${quotationData.paymentTerms || 'Not specified'}
+
+**Total Summary:**
+• Subtotal: ₹${totalAmount.toLocaleString()}
+• GST (${validGst}%): ₹${gstAmount.toLocaleString()}  
+• **Grand Total: ₹${grandTotal.toLocaleString()}**
+
+What would you like to edit? Or type "done" to generate PDF.`;
+}
 
 const AIBA_QUOTE_PROMPT = `
 You are AIBA, an AI assistant that generates sales quotations for a steel trading business.
@@ -53,6 +614,11 @@ export default function ChatBot() {
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   
+  // Checklist quotation states
+  const [checklistData, setChecklistData] = useState(null);
+  const [isChecklistMode, setIsChecklistMode] = useState(false);
+  const [awaitingMoreItems, setAwaitingMoreItems] = useState(false);
+  
   // Quotation flow states
   const [quotationFlow, setQuotationFlow] = useState({
     active: false,
@@ -77,7 +643,11 @@ export default function ChatBot() {
     originalPrompt: '', // Track original user prompt
     validationResult: null, // Track validation state
     awaitingCompletion: false, // Track if waiting for missing data
-    awaitingValidationDecision: false // Track if waiting for user's decision on validation
+    awaitingValidationDecision: false, // Track if waiting for user's decision on validation
+    awaitingProductConfirmation: false, // Track if waiting for "yes/no" after adding a product
+    structuredMode: false, // Track if we're in step-by-step Q&A mode
+    editMode: false, // Track if we're in edit mode
+    editingDraft: null // Store the draft being edited
   });
 
   const quotationSteps = [
@@ -93,20 +663,37 @@ export default function ChatBot() {
     'confirmation'
   ];
 
-  useEffect(() => {
-    const fetchBusinessInfo = async () => {
-      if (!currentUser) return;
-      try {
-        const ref = doc(db, 'users', currentUser.uid, 'business', 'info');
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
-          setBusinessInfo(snap.data());
-        }
-      } catch (err) {
-        console.error('Error fetching business info:', err);
+  // Fetch business info function
+  const fetchBusinessInfo = async () => {
+    if (!currentUser) return;
+    try {
+      const ref = doc(db, 'users', currentUser.uid, 'business', 'info');
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        setBusinessInfo(snap.data());
+        console.log('✅ Business info refreshed:', snap.data());
       }
-    };
+    } catch (err) {
+      console.error('Error fetching business info:', err);
+    }
+  };
+
+  useEffect(() => {
     fetchBusinessInfo();
+  }, [currentUser]);
+
+  // Listen for business info updates
+  useEffect(() => {
+    const handleBusinessInfoUpdate = (event) => {
+      console.log('🔄 Business info update event received:', event.detail);
+      fetchBusinessInfo(); // Refresh business info
+    };
+
+    window.addEventListener('businessInfoUpdated', handleBusinessInfoUpdate);
+    
+    return () => {
+      window.removeEventListener('businessInfoUpdated', handleBusinessInfoUpdate);
+    };
   }, [currentUser]);
 
   const fetchExistingCustomers = async () => {
@@ -129,18 +716,220 @@ export default function ChatBot() {
 
   const saveCustomer = async (customerData) => {
     try {
-      const customerRef = doc(db, 'users', currentUser.uid, 'customers', customerData.customerName);
+      // Validate customer name exists and is not empty
+      if (!customerData || !customerData.customerName || customerData.customerName.trim() === '') {
+        console.error('Error saving customer: customerName is required');
+        return false;
+      }
+
+      // Clean the customer name to make it a valid document ID
+      const cleanCustomerName = customerData.customerName.trim().replace(/[\/\s]+/g, '_');
+      
+      console.log('Saving customer:', cleanCustomerName);
+      
+      const customerRef = doc(db, 'users', currentUser.uid, 'customers', cleanCustomerName);
+      
+      // Check if customer already exists to update frequency
+      const existingCustomer = await getDoc(customerRef);
+      
       await setDoc(customerRef, {
-        name: customerData.customerName,
-        createdAt: new Date(),
-        createdBy: currentUser.uid,
-        lastQuotationDate: new Date()
+        name: customerData.customerName.trim(),
+        place: customerData.customerAddress || '',
+        gstin: customerData.customerGstin || '',
+        frequency: existingCustomer.exists() ? (existingCustomer.data().frequency || 0) + 1 : 1,
+        lastQuoted: new Date(),
+        createdAt: existingCustomer.exists() ? existingCustomer.data().createdAt : new Date(),
+        createdBy: currentUser.uid
       });
+      
+      console.log('Customer saved successfully');
       return true;
     } catch (error) {
       console.error('Error saving customer:', error);
       return false;
     }
+  };
+
+  // Fetch frequently billed customers (top 5 by frequency)
+  const fetchFrequentlyBilledCustomers = async () => {
+    try {
+      const customersRef = collection(db, 'users', currentUser.uid, 'customers');
+      const snapshot = await getDocs(customersRef);
+      const customers = [];
+      
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        customers.push({
+          id: doc.id,
+          name: data.name,
+          frequency: data.frequency || 1,
+          lastQuoted: data.lastQuoted,
+          ...data
+        });
+      });
+      
+      // Sort by frequency (descending) and take top 5
+      return customers
+        .sort((a, b) => b.frequency - a.frequency)
+        .slice(0, 5);
+    } catch (error) {
+      console.error('Error fetching frequently billed customers:', error);
+      return [];
+    }
+  };
+
+  // Get customer suggestions based on typed input (fuzzy matching)
+  const getCustomerSuggestions = async (input) => {
+    try {
+      if (!input || input.trim().length < 2) return [];
+      
+      const customersRef = collection(db, 'users', currentUser.uid, 'customers');
+      const snapshot = await getDocs(customersRef);
+      const customers = [];
+      
+      snapshot.forEach((doc) => {
+        customers.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      const searchTerm = input.toLowerCase().trim();
+      
+      // Fuzzy matching - case insensitive, partial match
+      const matches = customers.filter(customer => {
+        const name = (customer.name || '').toLowerCase();
+        const place = (customer.place || '').toLowerCase();
+        
+        return name.includes(searchTerm) || 
+               place.includes(searchTerm) ||
+               name.startsWith(searchTerm) ||
+               searchTerm.split(' ').some(term => name.includes(term));
+      });
+      
+      // Sort by relevance (exact matches first, then partial)
+      return matches.sort((a, b) => {
+        const aName = (a.name || '').toLowerCase();
+        const bName = (b.name || '').toLowerCase();
+        
+        // Exact match gets highest priority
+        if (aName === searchTerm) return -1;
+        if (bName === searchTerm) return 1;
+        
+        // Starts with gets next priority
+        if (aName.startsWith(searchTerm)) return -1;
+        if (bName.startsWith(searchTerm)) return 1;
+        
+        // Then by frequency
+        return (b.frequency || 1) - (a.frequency || 1);
+      }).slice(0, 8); // Limit to 8 suggestions
+      
+    } catch (error) {
+      console.error('Error getting customer suggestions:', error);
+      return [];
+    }
+  };
+
+  // Customer selection state
+  const [customerSelectionState, setCustomerSelectionState] = useState({
+    active: false,
+    searchInput: '',
+    suggestions: [],
+    frequentCustomers: [],
+    showSuggestions: false
+  });
+
+  // Handle customer name input with real-time suggestions
+  const handleCustomerNameInput = async (input) => {
+    setCustomerSelectionState(prev => ({
+      ...prev,
+      searchInput: input
+    }));
+
+    if (input.trim().length >= 2) {
+      const suggestions = await getCustomerSuggestions(input);
+      setCustomerSelectionState(prev => ({
+        ...prev,
+        suggestions,
+        showSuggestions: suggestions.length > 0
+      }));
+    } else {
+      setCustomerSelectionState(prev => ({
+        ...prev,
+        suggestions: [],
+        showSuggestions: false
+      }));
+    }
+  };
+
+  // Start smart customer selection flow
+  const startSmartCustomerSelection = async () => {
+    const frequentCustomers = await fetchFrequentlyBilledCustomers();
+    
+    setCustomerSelectionState({
+      active: true,
+      searchInput: '',
+      suggestions: [],
+      frequentCustomers,
+      showSuggestions: false
+    });
+
+    // Show customer selection interface
+    let frequentCustomersText = '';
+    if (frequentCustomers.length > 0) {
+      frequentCustomersText = `\n\n**📋 Frequently Billed Customers:**\n${frequentCustomers.map((customer, index) => `${index + 1}. ${customer.name} (${customer.frequency} quotes)`).join('\n')}\n\n*Click on a customer name below or type to search...*`;
+    }
+
+    setMessages(prev => [...prev, { 
+      type: 'bot', 
+      text: `Please enter the customer name.${frequentCustomersText}`,
+      showPDFButtons: false,
+      showCustomerSelection: true,
+      frequentCustomers,
+      customerSelectionActive: true
+    }]);
+  };
+
+  // Handle customer selection (either from suggestions or frequent customers)
+  const selectCustomer = async (customerName) => {
+    setMessages(prev => [...prev, { 
+      type: 'user', 
+      text: customerName
+    }]);
+
+    setMessages(prev => [...prev, { 
+      type: 'bot', 
+      text: `Customer selected: **${customerName}** — Proceeding with quotation…`
+    }]);
+
+    // Reset customer selection state
+    setCustomerSelectionState({
+      active: false,
+      searchInput: '',
+      suggestions: [],
+      frequentCustomers: [],
+      showSuggestions: false
+    });
+
+    // Continue with quotation flow
+    setQuotationFlow(prev => ({
+      ...prev,
+      askingAboutExistingCustomer: false,
+      active: true,
+      step: 2, // Skip customer name and save customer steps
+      data: {
+        ...prev.data,
+        customerName,
+        saveCustomer: false // Already exists in database
+      },
+      structuredMode: true
+    }));
+
+    setMessages(prev => [...prev, { 
+      type: 'bot', 
+      text: `Now, let's add products. Please enter product description:`,
+      showPDFButtons: false
+    }]);
   };
 
   const fetchSuggestions = async (input) => {
@@ -252,17 +1041,42 @@ export default function ChatBot() {
   // Debug helper - remove this in production
   const testRegexParser = () => {
     const testInputs = [
+      // Original simple format
       "Create quotation for ABC Industries 5MT ISMC 100x50 @ Rs.56 3MT MS FLAT @ Rs.52 GST 18% transport included",
-      "Quote for XYZ Corp 2000kg steel bars @ 55 loading charges Rs.250 immediate payment",
+      
+      // New multi-line structured format
+      `Quote to Sri Energy
+1. MS Channel 75x40x6mm
+   • 7.14 kg/m × 6 m × 140 Nos = 5,992.8 kg
+2. MS Flat 75x10mm  
+   • 5.89 kg/m × 6 m × 10 Nos = 353.4 kg
+3. MS Angle 40x40x6mm
+   • 3.58 kg/m × 6 m × 35 Nos = 752.4 kg
+4. MS Flat 50x6mm
+   • 2.355 kg/m × 6 m × 300 Nos = 4,239 kg
+
+Flat - 51+ GST
+ANGLE AND CHANNEL - 50₹+ GST
+
+Delivery Included
+30 days payment`,
+      
+      // Mixed format
       "Quotation for Golden Granite 10MT TMT bars @ 58 delivery 3 days validity 7 days"
     ];
     
-    console.log("🧪 Testing regex parser with sample inputs:");
+    console.log("🧪 Testing enhanced parser with sample inputs:");
     testInputs.forEach((input, index) => {
       console.log(`\n--- Test ${index + 1} ---`);
       console.log("Input:", input);
-      const result = parseQuotationPrompt(input);
+      const result = parsePromptWithFallback(input, false); // Test regex only first
       console.log("Result:", result);
+      
+      if (result.isStructured) {
+        console.log("✅ Successfully parsed as structured format");
+      } else {
+        console.log("ℹ️ Parsed using fallback method");
+      }
     });
   };
 
@@ -286,9 +1100,200 @@ export default function ChatBot() {
     console.log("Validation message:", message);
   };
 
+  // 🧠 SMART INPUT VALIDATION - Detects irrelevant input during quotation flow
+  const validateStepInput = (userInput, currentStep, currentData = {}) => {
+    const input = userInput.trim().toLowerCase();
+    
+    // Handle special cases first
+    if (input.includes('cancel') || input.includes('stop') || input.includes('exit')) {
+      return { valid: true, isCancel: true };
+    }
+    
+    switch (currentStep) {
+      case 'customerName':
+        // Customer name should be at least 2 characters and contain letters
+        if (userInput.trim().length < 2 || !/[a-zA-Z]/.test(userInput)) {
+          return { 
+            valid: false, 
+            message: "I need a proper customer name to create the quotation. Could you provide the customer's business name?" 
+          };
+        }
+        return { valid: true };
+        
+      case 'saveCustomer':
+        // Should be yes/no response
+        if (!input.includes('yes') && !input.includes('no') && !input.includes('y') && !input.includes('n')) {
+          return { 
+            valid: false, 
+            message: "Just need a quick yes or no — should I save this customer for future quotations?" 
+          };
+        }
+        return { valid: true };
+        
+      case 'products':
+        // For product description, should contain letters
+        if (!currentData.currentProduct?.description && (userInput.trim().length < 2 || !/[a-zA-Z]/.test(userInput))) {
+          return { 
+            valid: false, 
+            message: "Just checking — please enter the product description (like 'TMT Bars 12mm' or 'MS Flat 50x6mm')." 
+          };
+        }
+        // For quantity, should be a number
+        if (currentData.currentProduct?.description && !currentData.currentProduct?.qty) {
+          const qty = parseFloat(userInput);
+          if (isNaN(qty) || qty <= 0) {
+            return { 
+              valid: false, 
+              message: "I need the quantity in numbers (like '5000' for 5000 kg). What's the quantity?" 
+            };
+          }
+        }
+        // For rate, should be a number
+        if (currentData.currentProduct?.description && currentData.currentProduct?.qty && !currentData.currentProduct?.rate) {
+          const rate = parseFloat(userInput);
+          if (isNaN(rate) || rate <= 0) {
+            return { 
+              valid: false, 
+              message: "Please enter the rate per kg in numbers (like '58' for ₹58 per kg). What's the rate?" 
+            };
+          }
+        }
+        return { valid: true };
+        
+             case 'gst':
+         // Should be a number between 0-50 or common phrases
+         if (!input.includes('18') && !input.includes('12') && !input.includes('5') && !input.includes('included') && !input.includes('default') && !input.includes('standard')) {
+           const gst = parseFloat(userInput);
+           if (isNaN(gst) || gst < 0 || gst > 50) {
+             return { 
+               valid: false, 
+               message: "Could you specify the GST percentage? (Usually 18%, 12%, or 5%) Just type the number like '18'." 
+             };
+           }
+         }
+         return { valid: true };
+        
+      case 'transport':
+        // Very flexible - almost anything is valid for transport
+        return { valid: true };
+        
+      case 'loadingCharges':
+        // Very flexible - almost anything is valid
+        return { valid: true };
+        
+      case 'paymentTerms':
+      case 'deliveryTerms':
+      case 'priceValidity':
+        // Optional fields - anything is valid
+        return { valid: true };
+        
+      case 'confirmation':
+        // Should be yes/no response
+        if (!input.includes('yes') && !input.includes('no') && !input.includes('y') && !input.includes('n') && 
+            !input.includes('generate') && !input.includes('create') && !input.includes('cancel')) {
+          return { 
+            valid: false, 
+            message: "Ready to generate the PDF? Just say 'yes' to create the quotation or 'no' to make changes." 
+          };
+        }
+        return { valid: true };
+        
+      default:
+        return { valid: true };
+    }
+  };
+
+     // 🔍 DETECT OFF-TOPIC MESSAGES - Checks if user completely changed context
+   const detectOffTopicMessage = (userInput) => {
+     const offTopicKeywords = [
+       'weather', 'hello', 'hi', 'hey', 'help', 'what can you do', 'how are you',
+       'good morning', 'good evening', 'time', 'date', 'news', 'sports',
+       'different topic', 'something else', 'forget about', 'never mind'
+     ];
+     
+     const input = userInput.toLowerCase();
+     return offTopicKeywords.some(keyword => input.includes(keyword));
+   };
+
+   // 📝 GET STEP-SPECIFIC PROMPT MESSAGE - Returns appropriate message for each quotation step
+   const getStepPromptMessage = (currentStep) => {
+     switch (currentStep) {
+       case 'customerName':
+         return "Let's continue with the customer name. What's the customer's business name?";
+       case 'saveCustomer':
+         return "Should I save this customer for future quotations? (yes/no)";
+       case 'products':
+         return "Let's add products. Please enter the product description:";
+       case 'gst':
+         return "What's the GST percentage for this quotation? (Usually 18%)";
+       case 'transport':
+         return "Are transport charges included or extra?";
+       case 'loadingCharges':
+         return "What are the loading charges?";
+       case 'paymentTerms':
+         return "Any specific payment terms? (optional)";
+       case 'deliveryTerms':
+         return "Any delivery terms to mention? (optional)";
+       case 'priceValidity':
+         return "How long should this price be valid for? (optional)";
+       case 'confirmation':
+         return "Ready to generate the quotation PDF?";
+       default:
+         return "Let's continue building your quotation.";
+     }
+   };
+
   const handleQuotationFlow = async (userInput) => {
     const currentStep = quotationSteps[quotationFlow.step];
     const newData = { ...quotationFlow.data };
+    
+    // 🧠 VALIDATE INPUT FIRST
+    const validation = validateStepInput(userInput, currentStep, newData);
+    
+    // Handle cancellation request
+    if (validation.isCancel) {
+      setQuotationFlow(prev => ({ 
+        ...prev, 
+        active: false, 
+        step: 0,
+        structuredMode: false
+      }));
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: 'Quotation creation cancelled. What else can I help you with?' 
+      }]);
+      return;
+    }
+    
+         // Handle off-topic detection
+     if (detectOffTopicMessage(userInput)) {
+       let contextMessage;
+       if (newData.customerName) {
+         const productCount = newData.products?.length || 0;
+         contextMessage = `Looks like we were building a quotation for **${newData.customerName}**${productCount > 0 ? ` (${productCount} products added)` : ''}. Want to continue from where we left off?`;
+       } else {
+         contextMessage = `Looks like we were building a quotation. Want to continue from where we left off?`;
+       }
+       
+       setMessages(prev => [...prev, { 
+         type: 'bot', 
+         text: contextMessage,
+         showQuotationOptions: true,
+         currentStep: currentStep,
+         contextData: newData
+       }]);
+       return;
+     }
+    
+    // Handle invalid input with smart redirection
+    if (!validation.valid) {
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: validation.message
+      }]);
+      // Stay in the same step - don't advance
+      return;
+    }
     
     switch (currentStep) {
       case 'customerName':
@@ -336,17 +1341,12 @@ export default function ChatBot() {
             text: `Product added! Total products: ${newData.products.length}. Add another product? Type "yes" to add more or "no" to continue.` 
           }]);
           
-          if (userInput.toLowerCase().includes('no')) {
-            setQuotationFlow(prev => ({
-              ...prev,
-              step: prev.step + 1,
-              data: newData
-            }));
-            setMessages(prev => [...prev, { 
-              type: 'bot', 
-              text: 'Enter GST percentage (default 18%):' 
-            }]);
-          }
+          // Set the awaiting confirmation flag instead of trying to handle response immediately
+          setQuotationFlow(prev => ({
+            ...prev,
+            awaitingProductConfirmation: true,
+            data: newData
+          }));
           return;
         }
         break;
@@ -438,14 +1438,32 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
               priceValidity: ''
             },
             pendingGeneration: false,
-            originalPrompt: ''
+            originalPrompt: '',
+            askingToSaveCustomer: false,
+            askingAboutExistingCustomer: false,
+            showingCustomerList: false,
+            existingCustomers: [],
+            validationResult: null,
+            awaitingCompletion: false,
+            awaitingValidationDecision: false,
+            awaitingProductConfirmation: false,
+            structuredMode: false,
+            editMode: false,
+            editingDraft: null
           });
           setMessages(prev => [...prev, { 
             type: 'bot', 
             text: 'Quotation PDF generated successfully!' 
           }]);
         } else {
-          setQuotationFlow(prev => ({ ...prev, active: false, step: 0, originalPrompt: '' }));
+          setQuotationFlow(prev => ({ 
+            ...prev, 
+            active: false, 
+            step: 0, 
+            originalPrompt: '',
+            awaitingProductConfirmation: false,
+            structuredMode: false
+          }));
           setMessages(prev => [...prev, { 
             type: 'bot', 
             text: 'Quotation creation cancelled.' 
@@ -473,6 +1491,46 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       }
 
       const businessInfo = snap.data();
+      
+      // CRITICAL DEBUG: Log everything to understand data corruption
+      console.log('🔍 DEBUGGING BUSINESS INFO:');
+      console.log('Raw businessInfo from Firestore:', businessInfo);
+      console.log('Type of businessInfo:', typeof businessInfo);
+      console.log('Keys in businessInfo:', Object.keys(businessInfo || {}));
+      
+      // Check each field individually
+      console.log('businessName:', businessInfo?.businessName, typeof businessInfo?.businessName);
+      console.log('address:', businessInfo?.address, typeof businessInfo?.address);
+      console.log('bankName:', businessInfo?.bankName, typeof businessInfo?.bankName);
+      console.log('bankAccount:', businessInfo?.bankAccount, typeof businessInfo?.bankAccount);
+      console.log('ifsc:', businessInfo?.ifsc, typeof businessInfo?.ifsc);
+      console.log('bankBranch:', businessInfo?.bankBranch, typeof businessInfo?.bankBranch);
+      
+      // Check if any field contains product data
+      Object.entries(businessInfo || {}).forEach(([key, value]) => {
+        if (typeof value === 'string' && (value.includes('Channel') || value.includes('kg/m') || value.includes('Nos'))) {
+          console.error(`🚨 CONTAMINATED FIELD: ${key} = ${value}`);
+        }
+      });
+      
+      // EMERGENCY PROTECTION: Stop PDF generation if business info is corrupted
+      const hasCorruptedData = Object.values(businessInfo || {}).some(value => 
+        typeof value === 'string' && (
+          value.includes('Channel') || 
+          value.includes('kg/m') || 
+          value.includes('Nos') ||
+          value.includes('Flat') ||
+          value.includes('Angle') ||
+          value.includes('GST')
+        )
+      );
+      
+      if (hasCorruptedData) {
+        alert('🚨 ERROR: Business information appears to be corrupted with quotation data. Please go to Business Setup and re-enter your business details.');
+        console.error('🚨 ABORTING PDF generation due to corrupted business info');
+        return;
+      }
+      
       const documentNumber = `QUO_${Date.now()}`;
       const date = new Date().toLocaleDateString('en-IN');
       
@@ -481,42 +1539,58 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       
       // Ensure GST is valid before doing calculations
       const validGst = typeof quotationData.gst === 'number' && !isNaN(quotationData.gst) && quotationData.gst >= 0 ? quotationData.gst : 18;
-      const gst = taxableAmount * (validGst / 100);
-      const grandTotal = taxableAmount + gst;
+      const gstAmount = taxableAmount * (validGst / 100);
+      const grandTotal = taxableAmount + gstAmount;
 
-      // *** Initialize jsPDF document instance right after data fetching ***
+      // Initialize jsPDF document instance
       const pdfDoc = new jsPDF();
       let y = 15;
 
-      // Company Name (Seller Details - as requested in blue area)
+      // DEBUG: Add layout guides (remove in production)
+      // pdfDoc.setDrawColor(200, 200, 200);
+      // pdfDoc.rect(10, 10, 190, 270); // page boundary
+      // pdfDoc.line(140, 0, 140, 297); // vertical divider at x=140
+
+      // Document number and date (top-right) - FIXED POSITION
+      pdfDoc.setFontSize(11);
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('Document #: ', 150, 15);
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.text(documentNumber, 175, 15);
+      
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text('Date: ', 150, 23);
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.text(date, 165, 23);
+
+      // Company Name and Address (Left side - with proper wrapping)
       pdfDoc.setFontSize(18);
       pdfDoc.setFont('helvetica', 'bold');
       pdfDoc.text(businessInfo.businessName, 14, y);
-      y += 8;
+      y += 10;
+
+      // Address with text wrapping to prevent overflow
       pdfDoc.setFontSize(11);
       pdfDoc.setFont('helvetica', 'normal');
-      pdfDoc.text(businessInfo.address, 14, y);
-      y += 6;
+      const maxAddressWidth = 130; // Leave space for right-side content
+      const addressLines = pdfDoc.splitTextToSize(businessInfo.address, maxAddressWidth);
+      
+      // Render each address line
+      addressLines.forEach(line => {
+        pdfDoc.text(line, 14, y);
+        y += 5;
+      });
+      
+      y += 3; // Extra spacing after address
       pdfDoc.text(`GSTIN: ${businessInfo.gstin}`, 14, y);
       y += 6;
       pdfDoc.text(`Email: ${businessInfo.email}`, 14, y);
-
-      // Document number and date (top-right)
-      pdfDoc.setFontSize(11);
-      pdfDoc.setFont('helvetica', 'bold');
-      pdfDoc.text('Document #: ', 150, 20);
-      pdfDoc.setFont('helvetica', 'normal');
-      pdfDoc.text(documentNumber, 180, 20, { align: 'right' });
-      pdfDoc.setFont('helvetica', 'bold');
-      pdfDoc.text('Date: ', 150, 27);
-      pdfDoc.setFont('helvetica', 'normal');
-      pdfDoc.text(date, 180, 27, { align: 'right' });
+      y += 10;
 
       // To: Customer
-      y += 12;
       pdfDoc.setFont('helvetica', 'bold');
       pdfDoc.text(`To: ${quotationData.customerName}`, 14, y);
-      y += 6;
+      y += 10;
 
       // Table
       const tableBody = quotationData.products.map(item => [
@@ -537,7 +1611,7 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       ]);
       tableBody.push([
         { content: `Add: GST (${validGst}%)`, colSpan: 3, styles: { fontStyle: 'bold', fillColor: [220,220,220] } },
-        { content: `Rs.${gst.toLocaleString()}`, styles: { fontStyle: 'bold', fillColor: [220,220,220] } }
+        { content: `Rs.${gstAmount.toLocaleString()}`, styles: { fontStyle: 'bold', fillColor: [220,220,220] } }
       ]);
       tableBody.push([
         { content: 'Grand Total', colSpan: 3, styles: { fontStyle: 'bold', fillColor: [180,180,180] } },
@@ -556,38 +1630,109 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
         theme: 'grid',
         headStyles: { fillColor: [60,60,60], textColor: 255, fontStyle: 'bold', fontSize: 11 },
         bodyStyles: { fontSize: 11 },
-        styles: { cellPadding: 2 },
+        styles: { 
+          cellPadding: 2,
+          overflow: 'linebreak',
+          cellWidth: 'wrap'
+        },
+        columnStyles: {
+          0: { cellWidth: 80 },  // Description column
+          1: { cellWidth: 30 },  // Quantity column  
+          2: { cellWidth: 30 },  // Rate column
+          3: { cellWidth: 40 }   // Amount column
+        },
         didParseCell: function (data) {
           if (data.row.index >= quotationData.products.length) {
             data.cell.styles.fontStyle = 'bold';
           }
+        },
+        didDrawPage: function (data) {
+          // Ensure table doesn't interfere with other sections
+          console.log('Table completed at Y position:', data.cursor.y);
         }
       });
-      y = pdfDoc.lastAutoTable.finalY + 10;
+
+      // CRITICAL FIX: Reset Y position after table to prevent content bleeding
+      y = pdfDoc.lastAutoTable.finalY + 15;
 
       // Transport and Loading Charges box
       pdfDoc.setDrawColor(0);
       pdfDoc.setLineWidth(0.5);
-      pdfDoc.rect(14, y, 182, 24);
+      pdfDoc.rect(14, y, 182, 30);
       pdfDoc.setFont('helvetica', 'bold');
-      pdfDoc.text('Transport:', 18, y + 8);
+      pdfDoc.text('Transport:', 18, y + 10);
       pdfDoc.setFont('helvetica', 'normal');
-      pdfDoc.text(quotationData.transport, 40, y + 8);
+      pdfDoc.text(quotationData.transport, 45, y + 10);
+      
       pdfDoc.setFont('helvetica', 'bold');
-      pdfDoc.text('Loading Charges:', 18, y + 16);
+      pdfDoc.text('Loading Charges:', 18, y + 20);
       pdfDoc.setFont('helvetica', 'normal');
-      pdfDoc.text(quotationData.loadingCharges, 55, y + 16);
-      y += 32;
+      pdfDoc.text(quotationData.loadingCharges, 60, y + 20);
+      
+      // Move to next section with proper spacing
+      y += 40;
 
-      // Bank Details box
-      pdfDoc.rect(14, y, 182, 24);
+      // DEBUG: Log bank info to ensure we have correct data
+      console.log('Bank Info Debug:', {
+        bankDetails: businessInfo.bankDetails,
+        // Legacy fallback for old structure
+        legacyBankName: businessInfo.bankName,
+        legacyBankAccount: businessInfo.bankAccount,
+        legacyIfsc: businessInfo.ifsc,
+        legacyBankBranch: businessInfo.bankBranch
+      });
+
+      // Bank Details box - COMPLETELY ISOLATED SECTION WITH SAFETY MEASURES
+      const bankDetailsY = y; // Lock the Y position for bank section
+      
+      // CRITICAL: Create isolated bank data object to prevent any cross-contamination
+      const safeBankData = {
+        bankName: businessInfo.bankName || 'Not Specified',
+        accountNumber: businessInfo.bankAccount || 'Not Specified', 
+        ifscCode: businessInfo.ifsc || 'Not Specified',
+        branchName: businessInfo.branch || 'Main Branch'
+      };
+      
+      // DEBUG: Verify safe bank data doesn't contain product info
+      console.log('Safe Bank Data:', safeBankData);
+      Object.values(safeBankData).forEach(value => {
+        if (typeof value === 'string' && (value.includes('Channel') || value.includes('Flat') || value.includes('kg'))) {
+          console.error('⚠️ DANGER: Bank data contains product information!', value);
+          alert('Error: Bank details contain product data. Please check business setup.');
+        }
+      });
+      
+      // Clear any potential artifacts by resetting graphics state
+      pdfDoc.setDrawColor(0);
+      pdfDoc.setLineWidth(0.5);
+      pdfDoc.setTextColor(0, 0, 0); // Ensure black text
+      
+      // Draw bank details box with extra margin
+      pdfDoc.rect(14, bankDetailsY, 182, 45);
+      
+      // Bank Details Header
       pdfDoc.setFont('helvetica', 'bold');
-      pdfDoc.text('Bank Details:', 18, y + 8);
+      pdfDoc.setFontSize(11);
+      pdfDoc.text('Bank Details:', 18, bankDetailsY + 12);
+      
+      // Bank Details Content - USE ONLY safeBankData
       pdfDoc.setFont('helvetica', 'normal');
-      pdfDoc.text(businessInfo.bankName, 18, y + 14);
-      pdfDoc.text(`Acc No: ${businessInfo.bankAccount}`, 18, y + 19);
-      pdfDoc.text(`IFSC Code: ${businessInfo.ifsc}`, 80, y + 19);
-      pdfDoc.text(`Branch: ${businessInfo.bankName}`, 18, y + 24);
+      pdfDoc.setFontSize(10);
+      
+      // Line 1: Account Number
+      pdfDoc.text(`Acc No: ${safeBankData.accountNumber}`, 18, bankDetailsY + 22);
+      
+      // Line 2: IFSC Code
+      pdfDoc.text(`IFSC Code: ${safeBankData.ifscCode}`, 18, bankDetailsY + 30);
+      
+      // Line 3: Bank Name
+      pdfDoc.text(`Bank: ${safeBankData.bankName}`, 18, bankDetailsY + 38);
+      
+      // Line 4: Branch (right side)
+      pdfDoc.text(`Branch: ${safeBankData.branchName}`, 110, bankDetailsY + 30);
+
+      // Final Y position update with extra spacing
+      y = bankDetailsY + 50;
 
       // Save the PDF
       pdfDoc.save(`quotation_${quotationData.customerName.replace(/\s+/g, '_')}_${Date.now()}.pdf`);
@@ -673,6 +1818,174 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
     };
   };
 
+  // Steel estimation detection
+  const detectSteelEstimationRequest = (prompt) => {
+    const steelKeywords = [
+      'ISMB', 'RSJ', 'ISMC', 'ISA', 'HR SHEET', 'CR SHEET', 'MS PIPE', 'MS SQUARE', 'MS RECT', 'MS FLAT', 'MS ROUND',
+      'steel', 'quotation', 'estimate', 'rate', 'nos', '@', '+GST', 'To ', 'customer'
+    ];
+    
+    const hasSteel = steelKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    const hasQuantityRate = /\d+\s*nos?\s*@\s*\d+/i.test(prompt);
+    const hasCustomer = /to\s+[^,\n]+,/i.test(prompt);
+    
+    return hasSteel && (hasQuantityRate || hasCustomer);
+  };
+
+  // Steel estimation handler
+  const handleSteelEstimation = async (userPrompt) => {
+    try {
+      console.log('🔧 Processing steel estimation for:', userPrompt);
+      
+      // Parse the prompt to extract customer and items using enhanced parser
+      const parsedData = await parsePromptWithFallback(userPrompt, true);
+      const validation = validateParsedData(parsedData);
+      
+      if (!validation.success) {
+        return {
+          success: false,
+          message: `I couldn't parse your steel estimation request properly. Here are the issues:\n\n${validation.errors.join('\n')}\n\nPlease provide steel items in format: "ITEM_NAME - QTY Nos @ RATE+GST"`
+        };
+      }
+
+      // Calculate weights and estimate values
+      const estimationResults = {
+        customer: parsedData.customer || 'Unknown Customer',
+        items: [],
+        totalWeight: 0,
+        totalValue: 0,
+        gstAmount: 0,
+        grandTotal: 0,
+        warnings: [],
+        transport: parsedData.transport,
+        loading: parsedData.loading,
+        gst: parsedData.gst || 18
+      };
+
+      parsedData.items.forEach((item, index) => {
+        const { description, quantity, rate, actualWeight, amount, warnings } = item;
+        
+        // Use the calculated weight from parsePrompt (which now integrates calculateWeight)
+        const totalWeight = actualWeight || 0;
+        const value = amount || 0;
+        
+        estimationResults.items.push({
+          description,
+          quantity,
+          rate: rate || 0,
+          weight: totalWeight,
+          totalWeight,
+          value,
+          status: totalWeight > 0 ? 'found' : 'unknown_item',
+          matchScore: item.matchScore,
+          warnings: warnings || []
+        });
+
+        estimationResults.totalWeight += totalWeight;
+        estimationResults.totalValue += value;
+        
+        // Add any warnings from the item
+        if (warnings && warnings.length > 0) {
+          estimationResults.warnings.push(...warnings);
+        }
+      });
+
+      // Calculate GST
+      estimationResults.gstAmount = estimationResults.totalValue * (estimationResults.gst / 100);
+      estimationResults.grandTotal = estimationResults.totalValue + estimationResults.gstAmount;
+
+      // Add validation warnings
+      if (validation.warnings && validation.warnings.length > 0) {
+        estimationResults.warnings.push(...validation.warnings);
+      }
+
+      // Format response
+      let responseMessage = `## Steel Estimation for ${estimationResults.customer}\n\n`;
+      
+      if (parsedData.aiParsed) {
+        responseMessage += `🤖 *Parsed using AI assistance*\n\n`;
+      }
+      
+      if (estimationResults.warnings.length > 0) {
+        responseMessage += `⚠️ **Warnings:**\n${estimationResults.warnings.map(w => `- ${w}`).join('\n')}\n\n`;
+      }
+
+      responseMessage += `**Items Breakdown:**\n`;
+      estimationResults.items.forEach((item, index) => {
+        responseMessage += `\n${index + 1}. **${item.description}**\n`;
+        responseMessage += `   - Quantity: ${item.quantity} Nos\n`;
+        
+        if (item.rate > 0) {
+          responseMessage += `   - Rate: ₹${item.rate} per kg\n`;
+        } else {
+          responseMessage += `   - Rate: Not specified\n`;
+        }
+        
+        if (item.status === 'found' && item.totalWeight > 0) {
+          responseMessage += `   - Total weight: ${item.totalWeight.toFixed(2)} kg\n`;
+        }
+        
+        if (item.matchScore && item.matchScore < 1.0) {
+          responseMessage += `   - Match confidence: ${(item.matchScore * 100).toFixed(1)}%\n`;
+        }
+        
+        if (item.value > 0) {
+          responseMessage += `   - Value: ₹${item.value.toLocaleString()}\n`;
+        }
+      });
+
+      responseMessage += `\n**Summary:**\n`;
+      responseMessage += `- Total Weight: ${estimationResults.totalWeight.toFixed(2)} kg\n`;
+      responseMessage += `- Subtotal: ₹${estimationResults.totalValue.toLocaleString()}\n`;
+      responseMessage += `- GST (${estimationResults.gst}%): ₹${estimationResults.gstAmount.toLocaleString()}\n`;
+      responseMessage += `- **Grand Total: ₹${estimationResults.grandTotal.toLocaleString()}**\n`;
+
+      if (estimationResults.transport) {
+        responseMessage += `\n**Transport:** ${estimationResults.transport}\n`;
+      }
+
+      if (estimationResults.loading) {
+        responseMessage += `**Loading:** ${estimationResults.loading}\n`;
+      }
+
+      // Convert to quotation format for PDF generation with defaults applied
+      const quotationData = applyFallbackDefaults({
+        customerName: estimationResults.customer,
+        saveCustomer: false,
+        products: estimationResults.items.map(item => ({
+          description: item.description,
+          qty: item.totalWeight > 0 ? item.totalWeight.toFixed(2) : item.quantity,
+          rate: item.rate,
+          amount: item.value
+        })),
+        gst: estimationResults.gst,
+        transport: estimationResults.transport,
+        loadingCharges: estimationResults.loading,
+        paymentTerms: '',
+        deliveryTerms: '',
+        priceValidity: ''
+      });
+
+      return {
+        success: true,
+        message: responseMessage,
+        showQuotation: true,
+        data: estimationResults,
+        quotationData: quotationData
+      };
+
+    } catch (error) {
+      console.error('Steel estimation error:', error);
+      return {
+        success: false,
+        message: `Error processing steel estimation: ${error.message}`
+      };
+    }
+  };
+
   const hybridParseQuotation = async (userMessage) => {
     console.log("🤖 Starting hybrid parsing for:", userMessage);
     
@@ -710,6 +2023,92 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
     }
   };
 
+  // Helper function to detect user intent from short responses
+  const detectUserIntent = (input) => {
+    const text = input.toLowerCase().trim();
+    
+    // Affirmative responses
+    const affirmativePatterns = [
+      'yes', 'y', 'yeah', 'yep', 'sure', 'ok', 'okay', 'fine', 'good', 
+      'proceed', 'continue', 'go ahead', 'generate', 'create', 'do it',
+      'save', 'confirm', 'agree', 'accept', 'correct', 'right'
+    ];
+    
+    // Negative responses  
+    const negativePatterns = [
+      'no', 'n', 'nope', 'cancel', 'stop', 'skip', 'abort', 'decline',
+      'dont', 'don\'t', 'not now', 'later', 'never mind'
+    ];
+    
+    if (affirmativePatterns.some(pattern => text === pattern || text.includes(pattern))) {
+      return 'affirmative';
+    }
+    
+    if (negativePatterns.some(pattern => text === pattern || text.includes(pattern))) {
+      return 'negative';
+    }
+    
+    return 'neutral';
+  };
+
+  // 🛡️ DETECT VAGUE/SOFT INPUTS DURING QUOTATION FLOW
+  const handleSoftInputDuringQuotation = (userInput, currentStep) => {
+    const input = userInput.toLowerCase().trim();
+    
+    // ⚠️ CRITICAL: Don't treat 'yes'/'no' as vague when in confirmation step or saveCustomer step
+    if (currentStep === 'confirmation' || currentStep === 'saveCustomer') {
+      const intent = detectUserIntent(input);
+      if (intent === 'affirmative' || intent === 'negative') {
+        return null; // Let normal processing handle yes/no responses
+      }
+    }
+    
+    // List of vague/soft inputs that don't help with quotation building
+    const vaguePhrases = [
+      'yes', 'ok', 'okay', 'fine', 'cool', 'alright', 'sure', 'good',
+      'hello', 'hi', 'hey', 'you there', 'ready', 'continue', 'go',
+      'thanks', 'thank you', 'noted', 'got it', 'understood', 'right'
+    ];
+    
+    if (vaguePhrases.includes(input)) {
+      // Return context-appropriate redirect message
+      switch (currentStep) {
+        case 'customerName':
+          return "Got it — let's continue. What's the customer's business name?";
+        case 'saveCustomer':
+          return "Noted. Should I save this customer for future quotations? (yes/no)";
+        case 'products':
+          const currentProduct = quotationFlow.data.currentProduct || {};
+          if (!currentProduct.description) {
+            return "We're building a quote. What's the product description?";
+          } else if (!currentProduct.qty) {
+            return "Cool. What's the quantity in kg?";
+          } else if (!currentProduct.rate) {
+            return "Got it. What's the rate per kg?";
+          }
+          return "Just checking — please enter the next product details.";
+        case 'gst':
+          return "Noted. What's the GST percentage? (Usually 18%)";
+        case 'transport':
+          return "Got it. Are transport charges included or extra?";
+        case 'loadingCharges':
+          return "Cool. What are the loading charges?";
+        case 'paymentTerms':
+          return "Thanks. Any payment terms to mention?";
+        case 'deliveryTerms':
+          return "Noted. Any delivery terms?";
+        case 'priceValidity':
+          return "Got it. How long should this price be valid?";
+        case 'confirmation':
+          return "Ready to generate the PDF? Say 'yes' to create or 'no' to edit.";
+        default:
+          return "Let's continue with the quotation. What's next?";
+      }
+    }
+    
+    return null; // Not a vague input, let normal processing continue
+  };
+
   const handleSend = async () => {
     if (!prompt.trim()) return;
 
@@ -717,424 +2116,190 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       setIsLoading(true);
       setMessages(prev => [...prev, { type: 'user', text: prompt }]);
       
-      // Check if user is responding to existing customer question
-      if (quotationFlow.askingAboutExistingCustomer) {
-        if (prompt.toLowerCase().includes('yes')) {
-          const customers = await fetchExistingCustomers();
-          if (customers.length > 0) {
-            setQuotationFlow(prev => ({
-              ...prev,
-              askingAboutExistingCustomer: false,
-              showingCustomerList: true,
-              existingCustomers: customers
-            }));
-            
-            const customerList = customers.map((customer, index) => `${index + 1}. ${customer.name}`).join('\n');
-            setMessages(prev => [...prev, { 
-              type: 'bot', 
-              text: `Here are your existing customers:\n\n${customerList}\n\nPlease type the number of the customer you'd like to create a quotation for:` 
-            }]);
-          } else {
-            setMessages(prev => [...prev, { 
-              type: 'bot', 
-              text: 'You don\'t have any saved customers yet. Let\'s create a new quotation. What is the customer name?' 
-            }]);
-            setQuotationFlow(prev => ({ 
-              ...prev, 
-              askingAboutExistingCustomer: false,
-              active: true,
-              step: 0
-            }));
-          }
-        } else {
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: 'Let\'s create a new quotation. What is the customer name?' 
-          }]);
-          setQuotationFlow(prev => ({ 
-            ...prev, 
-            askingAboutExistingCustomer: false,
-            active: true,
-            step: 0
-          }));
-        }
-        setPrompt('');
-        setIsLoading(false);
-        return;
-      }
+      // 🧠 NEW STATE MANAGER INTEGRATION
+      console.log('🧠 State Manager: Current state:', chatbotStateManager.getStateSummary());
+      const routing = chatbotStateManager.routeMessage(prompt);
+      console.log('🎯 State Manager: Routing decision:', routing);
       
-      // Check if user is selecting from customer list
-      if (quotationFlow.showingCustomerList) {
-        const customerIndex = parseInt(prompt.trim()) - 1;
-        if (customerIndex >= 0 && customerIndex < quotationFlow.existingCustomers.length) {
-          const selectedCustomer = quotationFlow.existingCustomers[customerIndex];
-          setQuotationFlow(prev => ({
-            ...prev,
-            showingCustomerList: false,
-            active: true,
-            step: 2, // Skip customer name and save customer steps
-            data: {
-              ...prev.data,
-              customerName: selectedCustomer.name,
-              saveCustomer: false // Already saved
-            }
-          }));
+      // Try new prompt parser first for quotation intents
+      if (routing.action === 'start_quotation' || routing.intent === 'quotation_intent') {
+        console.log('🔍 Trying new prompt parser for quotation...');
+        const parseResult = await promptParser.parsePromptToQuote(prompt);
+        
+        // ✅ Handle clarification requests
+        if (parseResult.needsClarification) {
+          console.log('❓ Parser requesting clarification:', parseResult.missingFields);
           setMessages(prev => [...prev, { 
             type: 'bot', 
-            text: `Great! Creating quotation for ${selectedCustomer.name}.\n\nNow, let's add products. Please enter product description:` 
+            text: parseResult.clarificationMessage,
+            showPDFButtons: false
           }]);
-        } else {
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: 'Invalid selection. Please enter a valid customer number from the list above:' 
-          }]);
-        }
-        setPrompt('');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Check if user is responding to save customer question
-      if (quotationFlow.askingToSaveCustomer) {
-        if (prompt.toLowerCase().includes('yes')) {
-          const saved = await saveCustomer(quotationFlow.data);
-          if (saved) {
-            setMessages(prev => [...prev, { 
-              type: 'bot', 
-              text: `Great! I've saved ${quotationFlow.data.customerName} to your customer list for future use.` 
-            }]);
-          } else {
-            setMessages(prev => [...prev, { 
-              type: 'bot', 
-              text: 'Sorry, there was an error saving the customer details. Please try again later.' 
-            }]);
-          }
-        } else {
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: 'No problem! The customer details were not saved.' 
-          }]);
+          setPrompt('');
+          setIsLoading(false);
+          return;
         }
         
-        // Reset the flow for already saved customers
-        setQuotationFlow(prev => ({
-          ...prev,
-          pendingGeneration: false,
-          data: {
-            customerName: '',
-            saveCustomer: false,
-            products: [],
-            currentProduct: { description: '', qty: '', rate: '' },
-            gst: 18,
-            transport: 'Included',
-            loadingCharges: 'Rs.250 per MT extra',
-            paymentTerms: '',
-            deliveryTerms: '',
-            priceValidity: ''
-          },
-          originalPrompt: '',
-          validationResult: null,
-          awaitingCompletion: false
-        }));
-        
-        setPrompt('');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Check if user is responding to validation decision
-      if (quotationFlow.awaitingValidationDecision) {
-        if (prompt.toLowerCase().includes('skip') || prompt.toLowerCase().includes('defaults')) {
-          // User wants to skip with defaults
-          const { updatedData } = quotationFlow.validationResult;
+        if (parseResult.confidence > 70 && parseResult.customerName !== "Not specified" && parseResult.products.length > 0) {
+          console.log('✅ High confidence parse, generating quotation directly');
+          
+          // Update state manager
+          chatbotStateManager.setIntent('quotation_intent', {
+            quotationStep: 'finalize',
+            quotationDraft: parseResult
+          });
+          
+          // Convert to quotation format and show preview
+          const quotationData = {
+            customerName: parseResult.customerName,
+            products: parseResult.products,
+            gst: parseResult.gst,
+            transport: parseResult.transport,
+            loadingCharges: parseResult.loadingCharges,
+            paymentTerms: parseResult.paymentTerms,
+            priceValidity: parseResult.priceValidity
+          };
+          
+          const summary = generateQuotationSummary(quotationData);
           
           setMessages(prev => [...prev, { 
             type: 'bot', 
-            text: 'Proceeding with defaults for missing fields...' 
-          }]);
-          
-          // Generate PDF with defaults
-          await generateQuotationPDF(updatedData);
-          
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: 'Quotation PDF generated successfully!' 
-          }]);
-          
-          // Ask about saving customer if new
-          if (!quotationFlow.data.saveCustomer) {
-            setMessages(prev => [...prev, { 
-              type: 'bot', 
-              text: 'Do you want me to save this customer\'s details for future use? (Yes / No)' 
-            }]);
-            
-            setQuotationFlow(prev => ({
-              ...prev,
-              awaitingValidationDecision: false,
-              askingToSaveCustomer: true
-            }));
-          } else {
-            // Reset flow
-            setQuotationFlow(prev => ({
-              ...prev,
-              awaitingValidationDecision: false,
-              pendingGeneration: false,
-              data: {
-                customerName: '',
-                saveCustomer: false,
-                products: [],
-                currentProduct: { description: '', qty: '', rate: '' },
-                gst: 18,
-                transport: 'Included',
-                loadingCharges: 'Rs.250 per MT extra',
-                paymentTerms: '',
-                deliveryTerms: '',
-                priceValidity: ''
-              },
-              originalPrompt: '',
-              validationResult: null
-            }));
-          }
-          
-        } else if (prompt.toLowerCase().includes('provide') || prompt.toLowerCase().includes('add')) {
-          // User wants to provide missing information
-          const { missingRequired } = quotationFlow.validationResult;
-          
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: `Great! Please provide the missing information:
-
-${missingRequired.join('\n')}
-
-You can provide all the information in one message or one by one.` 
+            text: `🎯 **Smart Quotation Generated!**\n\n${summary}\n\n✅ Ready to generate PDF?`,
+            showPDFButtons: true
           }]);
           
           setQuotationFlow(prev => ({
             ...prev,
-            awaitingValidationDecision: false,
-            awaitingCompletion: true
-          }));
-          
-        } else {
-          // User provided unclear response
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: 'Please respond with "provide" to add missing information or "skip" to use defaults.' 
-          }]);
-        }
-        
-        setPrompt('');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Check if user is responding to validation completion prompt
-      if (quotationFlow.awaitingCompletion) {
-        if (prompt.toLowerCase().includes('continue')) {
-          // Continue with defaults for missing fields
-          const validation = validateQuotationData(quotationFlow.data);
-          
-          // Calculate totals and show final summary
-          const totalAmount = validation.updatedData.products.reduce((sum, item) => sum + item.amount, 0);
-          const validGst = typeof validation.updatedData.gst === 'number' && !isNaN(validation.updatedData.gst) && validation.updatedData.gst >= 0 ? validation.updatedData.gst : 18;
-          const gstAmount = totalAmount * (validGst / 100);
-          const grandTotal = totalAmount + gstAmount;
-          
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: `✅ Proceeding with defaults for missing fields:
-
-Customer: ${validation.updatedData.customerName}
-Products: ${validation.updatedData.products.length} items
-${validation.updatedData.products.map(p => `- ${p.description}: ${p.qty}kg @ Rs.${p.rate} = Rs.${p.amount.toLocaleString()}`).join('\n')}
-
-Subtotal: Rs.${totalAmount.toLocaleString()}
-GST (${validGst}%): Rs.${gstAmount.toLocaleString()}
-Grand Total: Rs.${grandTotal.toLocaleString()}
-
-Ready to generate PDF? (yes/no)` 
-          }]);
-          
-          setQuotationFlow(prev => ({
-            ...prev,
-            data: validation.updatedData,
+            data: quotationData,
             pendingGeneration: true,
-            awaitingCompletion: false
-          }));
-          
-        } else if (prompt.toLowerCase().includes('start over')) {
-          // Reset and start over
-          setQuotationFlow(prev => ({
-            ...prev,
-            active: false,
-            step: 0,
-            data: {
-              customerName: '',
-              saveCustomer: false,
-              products: [],
-              currentProduct: { description: '', qty: '', rate: '' },
-              gst: 18,
-              transport: 'Included',
-              loadingCharges: 'Rs.250 per MT extra',
-              paymentTerms: '',
-              deliveryTerms: '',
-              priceValidity: ''
-            },
-            pendingGeneration: false,
-            awaitingCompletion: false,
-            validationResult: null,
-            originalPrompt: ''
-          }));
-          
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: 'Starting over! Please provide your quotation request again.' 
-          }]);
-          
-        } else {
-          // User is providing missing information - try to parse and update
-          try {
-            const additionalData = parseQuotationPrompt(prompt);
-            const updatedData = { ...quotationFlow.data };
-            
-            // Merge additional data
-            if (additionalData.customerName && !updatedData.customerName) {
-              updatedData.customerName = additionalData.customerName;
-            }
-            if (additionalData.items && additionalData.items.length > 0) {
-              updatedData.products = [...(updatedData.products || []), ...additionalData.items.map(item => ({
-                description: item.description,
-                qty: item.quantity,
-                rate: item.rate,
-                amount: item.quantity * item.rate
-              }))];
-            }
-            if (additionalData.transport) updatedData.transport = additionalData.transport;
-            if (additionalData.loadingCharges) updatedData.loadingCharges = additionalData.loadingCharges;
-            if (additionalData.paymentTerms) updatedData.paymentTerms = additionalData.paymentTerms;
-            
-            // Re-validate
-            const newValidation = validateQuotationData(updatedData);
-            
-            if (newValidation.isComplete) {
-              const validationMessage = getValidationMessage(newValidation);
-              setMessages(prev => [...prev, { 
-                type: 'bot', 
-                text: `Great! I've updated the quotation with your additional information.
-
-${validationMessage}` 
-              }]);
-              
-              setQuotationFlow(prev => ({
-                ...prev,
-                data: newValidation.updatedData,
-                pendingGeneration: true,
-                awaitingCompletion: false
-              }));
-            } else {
-              const validationMessage = getValidationMessage(newValidation);
-              setMessages(prev => [...prev, { 
-                type: 'bot', 
-                text: `Updated! But still missing some information:
-
-${validationMessage}
-
-Continue providing missing info, type "continue" to proceed with defaults, or "start over".` 
-              }]);
-              
-              setQuotationFlow(prev => ({
-                ...prev,
-                data: newValidation.updatedData,
-                validationResult: newValidation,
-                awaitingCompletion: true
-              }));
-            }
-          } catch (error) {
-            setMessages(prev => [...prev, { 
-              type: 'bot', 
-              text: 'I couldn\'t understand that additional information. Please try again, type "continue" to proceed with defaults, or "start over".' 
-            }]);
-          }
-        }
-        
-        setPrompt('');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Check if user is confirming PDF generation
-      if (quotationFlow.pendingGeneration && (prompt.toLowerCase().includes('yes') || prompt.toLowerCase().includes('generate'))) {
-        // Validate data before PDF generation
-        const { isComplete, missingRequired, updatedData } = validateQuotationData(quotationFlow.data);
-        
-        if (!isComplete) {
-          const missingList = missingRequired.join(", ");
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: `⚠️ I'm almost ready to generate your PDF. Can you please confirm the following before I proceed?
-
-Missing Required: ${missingList}
-
-Would you like to:
-📝 Provide the missing information
-⏭️ Skip & Use Defaults
-
-Type "provide" to add missing info or "skip" to use defaults.` 
-          }]);
-          
-          // Set state to await user's decision
-          setQuotationFlow(prev => ({
-            ...prev,
-            awaitingValidationDecision: true,
-            validationResult: { isComplete, missingRequired, updatedData }
+            originalPrompt: prompt
           }));
           
           setPrompt('');
           setIsLoading(false);
           return;
         }
+      }
+      
+      // 🛡️ QUOTATION CONTEXT GUARD - Highest Priority Check
+      // Prevent fallback to general classification during quotation flow
+      if (quotationFlow.active || quotationFlow.askingAboutExistingCustomer || 
+          quotationFlow.showingCustomerList || quotationFlow.pendingGeneration || 
+          customerSelectionState.active) {
         
-        // All required data exists, generate PDF
-        await generateQuotationPDF(updatedData);
+        console.log('🏗️ Quotation context active, bypassing general classification');
         
-        // After PDF generation is complete, show success message
-        setMessages(prev => [...prev, { 
-          type: 'bot', 
-          text: 'Quotation PDF generated successfully!' 
-        }]);
+        // 🚨 PRIORITY: Handle PDF generation confirmation immediately
+        if (quotationFlow.pendingGeneration) {
+          console.log('🔥 PDF Generation pending, handling confirmation:', prompt);
+          await handlePDFConfirmation(prompt);
+          setPrompt('');
+          setIsLoading(false);
+          return;
+        }
         
-        // Only ask to save customer if it's a new customer (not already saved)
-        if (!quotationFlow.data.saveCustomer) {
-          // Ask about saving customer after PDF is complete
+        // Handle soft/vague inputs during quotation flow
+        if (quotationFlow.active && quotationFlow.structuredMode) {
+          const currentStep = quotationSteps[quotationFlow.step];
+          const softInputResponse = handleSoftInputDuringQuotation(prompt, currentStep);
+          
+          if (softInputResponse) {
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: softInputResponse
+            }]);
+            setPrompt('');
+            setIsLoading(false);
+            return;
+          }
+        }
+      }
+
+      // 🛠️ HANDLE EDIT MODE - Process natural language edits (PRIORITY CHECK)
+      console.log('🔍 Checking edit mode status:', quotationFlow.editMode);
+      if (quotationFlow.editMode) {
+        console.log('🛠️ Edit mode is active, processing edit command:', prompt);
+        console.log('🛠️ Current quotationFlow state:', quotationFlow);
+        
+        // Safety check - ensure we have a draft to edit
+        if (!quotationFlow.editingDraft) {
+          console.error('❌ Edit mode active but no editing draft found');
           setMessages(prev => [...prev, { 
             type: 'bot', 
-            text: 'Do you want me to save this customer\'s details for future use? (Yes / No)' 
+            text: '❌ Edit mode error: No draft found to edit. Please create a new quotation.',
+            showPDFButtons: false
           }]);
+          setQuotationFlow(prev => ({ ...prev, editMode: false }));
+          setPrompt('');
+          setIsLoading(false);
+          return;
+        }
+        
+        await handleEditMode(prompt);
+        setPrompt('');
+        setIsLoading(false);
+        return;
+      }
+
+      // 📋 HANDLE CHECKLIST QUOTATION MODE
+      if (isChecklistMode && checklistData?.checklist) {
+        console.log('📋 Checklist mode active, processing input:', prompt);
+        
+        // Check for checklist commands first
+        if (isChecklistCommand(prompt)) {
+          const commandResult = handleChecklistCommand(prompt, checklistData.checklist, {
+            awaitingMoreItems
+          });
           
-          // Set state to ask about saving customer
+          if (commandResult) {
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: commandResult.response,
+              showPDFButtons: commandResult.showPDFButtons || false
+            }]);
+            
+            // Update checklist data
+            if (commandResult.checklistData) {
+              setChecklistData(commandResult.checklistData);
+            }
+            
+            setPrompt('');
+            setIsLoading(false);
+            return;
+          }
+        }
+        
+        // Process regular checklist input
+        const checklistResult = await handleChecklistQuotation(prompt, checklistData.checklist, {
+          awaitingMoreItems
+        });
+        
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: checklistResult.response,
+          showPDFButtons: checklistResult.showPDFButtons || false
+        }]);
+        
+        // Update states based on result
+        if (checklistResult.checklistData) {
+          setChecklistData(checklistResult.checklistData);
+        }
+        
+        if (checklistResult.awaitingMoreItems !== undefined) {
+          setAwaitingMoreItems(checklistResult.awaitingMoreItems);
+        }
+        
+        // Handle completion
+        if (checklistResult.checklistComplete) {
+          setIsChecklistMode(false);
+          setAwaitingMoreItems(false);
+          
+          // Convert checklist data to quotation format for PDF generation
+          const quotationData = exportChecklistData(checklistData.checklist);
           setQuotationFlow(prev => ({
             ...prev,
-            pendingGeneration: false,
-            askingToSaveCustomer: true
-          }));
-        } else {
-          // Reset the flow for already saved customers
-          setQuotationFlow(prev => ({
-            ...prev,
-            pendingGeneration: false,
-            data: {
-              customerName: '',
-              saveCustomer: false,
-              products: [],
-              currentProduct: { description: '', qty: '', rate: '' },
-              gst: 18,
-              transport: 'Included',
-              loadingCharges: 'Rs.250 per MT extra',
-              paymentTerms: '',
-              deliveryTerms: '',
-              priceValidity: ''
-            },
-            originalPrompt: ''
+            data: quotationData,
+            pendingGeneration: true,
+            originalPrompt: prompt
           }));
         }
         
@@ -1142,149 +2307,222 @@ Type "provide" to add missing info or "skip" to use defaults.`
         setIsLoading(false);
         return;
       }
-      
-      // Check if user is declining PDF generation
-      if (quotationFlow.pendingGeneration && (prompt.toLowerCase().includes('no') || prompt.toLowerCase().includes('cancel'))) {
-        setQuotationFlow(prev => ({ 
-          ...prev, 
-          pendingGeneration: false,
-          data: {
-            customerName: '',
-            saveCustomer: false,
-            products: [],
-            currentProduct: { description: '', qty: '', rate: '' },
-            gst: 18,
-            transport: 'Included',
-            loadingCharges: 'Rs.250 per MT extra',
-            paymentTerms: '',
-            deliveryTerms: '',
-            priceValidity: ''
-          }
-        }));
-        setMessages(prev => [...prev, { 
-          type: 'bot', 
-          text: 'Quotation generation cancelled. Feel free to ask for any modifications or create a new quotation.' 
-        }]);
-        setPrompt('');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Check if user wants to create a quotation (manual flow)
-      if (prompt.toLowerCase().includes('create quotation') && !quotationFlow.active && !prompt.toLowerCase().includes('for ')) {
-        setQuotationFlow(prev => ({ 
-          ...prev, 
-          askingAboutExistingCustomer: true,
-          originalPrompt: prompt
-        }));
-        setMessages(prev => [...prev, { 
-          type: 'bot', 
-          text: 'Would you like to create a quotation for an existing customer? (Yes / No)' 
-        }]);
-        setPrompt('');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Handle quotation flow
+
+      // Handle context-aware responses for active flows
       if (quotationFlow.active) {
+        // Special handling for product confirmation step
+        if (quotationFlow.awaitingProductConfirmation) {
+          const intent = detectUserIntent(prompt);
+          if (intent === 'affirmative') {
+            // Continue adding products
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: 'Great! Please enter the next product description:' 
+            }]);
+            setQuotationFlow(prev => ({
+              ...prev,
+              awaitingProductConfirmation: false,
+              data: {
+                ...prev.data,
+                currentProduct: { description: '', qty: '', rate: '' }
+              }
+            }));
+          } else if (intent === 'negative') {
+            // Move to next step
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: 'Perfect! Now let\'s set the GST percentage (usually 18%):' 
+            }]);
+            setQuotationFlow(prev => ({
+              ...prev,
+              step: prev.step + 1,
+              awaitingProductConfirmation: false
+            }));
+          } else {
+            // Invalid response for product confirmation
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: 'Would you like to add another product? Just say "yes" to add more or "no" to continue with GST details.' 
+            }]);
+          }
+          setPrompt('');
+          setIsLoading(false);
+          return;
+        }
+        
         await handleQuotationFlow(prompt);
         setPrompt('');
         setIsLoading(false);
         return;
       }
-      
-      const aiResponse = await hybridParseQuotation(prompt);
-      
-      // Check if the response is parsed quotation data (object) or raw text (string)
-      if (aiResponse && typeof aiResponse === 'object' && aiResponse.customerName && aiResponse.items) {
-        // Convert extracted data to our format
-        const formattedData = convertToQuotationFormat(aiResponse);
-        
-        // Validate the quotation data
-        const validation = validateQuotationData(formattedData);
-        console.log("🔍 Validation result:", validation);
-        
-        if (validation.isComplete) {
-          // Calculate totals for display with GST validation
-          const totalAmount = validation.updatedData.products.reduce((sum, item) => sum + item.amount, 0);
-          const validGst = typeof validation.updatedData.gst === 'number' && !isNaN(validation.updatedData.gst) && validation.updatedData.gst >= 0 ? validation.updatedData.gst : 18;
-          const gstAmount = totalAmount * (validGst / 100);
-          const grandTotal = totalAmount + gstAmount;
-          
-          const validationMessage = getValidationMessage(validation);
-          
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: `I've extracted the following quotation details:
 
-Customer: ${validation.updatedData.customerName}
-Products: ${validation.updatedData.products.length} items
-${validation.updatedData.products.map(p => `- ${p.description}: ${p.qty}kg @ Rs.${p.rate} = Rs.${p.amount.toLocaleString()}`).join('\n')}
-
-Subtotal: Rs.${totalAmount.toLocaleString()}
-GST (${validGst}%): Rs.${gstAmount.toLocaleString()}
-Grand Total: Rs.${grandTotal.toLocaleString()}
-
-${validationMessage}` 
-          }]);
-          
-          // Store the validated data for potential PDF generation
-          setQuotationFlow(prev => ({
-            ...prev,
-            data: validation.updatedData,
-            pendingGeneration: true,
-            originalPrompt: prompt
-          }));
-          
-        } else {
-          // Data is incomplete, ask for missing information
-          const validationMessage = getValidationMessage(validation);
-          
-          setMessages(prev => [...prev, { 
-            type: 'bot', 
-            text: `I've partially extracted quotation details:
-
-${validation.updatedData.customerName ? `Customer: ${validation.updatedData.customerName}` : ''}
-${validation.updatedData.products?.length > 0 ? `Products: ${validation.updatedData.products.length} items` : ''}
-
-${validationMessage}
-
-Would you like to:
-1. Continue with missing information (I'll use defaults)
-2. Provide the missing details
-3. Start over
-
-Type "continue", provide missing info, or "start over".` 
-          }]);
-          
-          // Store the partial data for potential completion
-          setQuotationFlow(prev => ({
-            ...prev,
-            data: validation.updatedData,
-            pendingGeneration: false,
-            originalPrompt: prompt,
-            validationResult: validation,
-            awaitingCompletion: true
-          }));
+      // Handle smart customer selection flow
+      if (customerSelectionState.active) {
+        if (customerSelectionState.showSuggestions && customerSelectionState.suggestions.length > 0) {
+          // Check if user typed a customer name that matches suggestions
+          const matchingSuggestion = customerSelectionState.suggestions.find(
+            suggestion => suggestion.name.toLowerCase() === prompt.toLowerCase().trim()
+          );
+          if (matchingSuggestion) {
+            await selectCustomer(matchingSuggestion.name);
+            setPrompt('');
+            setIsLoading(false);
+            return;
+          }
         }
         
-      } else {
-        // If parsing failed, try regular AI response
-        console.log("🔄 Falling back to regular AI response...");
-        const regularAiResponse = await sendToOpenAI(prompt);
+        // Check if user typed a number for frequent customers
+        const customerIndex = parseInt(prompt.trim()) - 1;
+        if (customerIndex >= 0 && customerIndex < customerSelectionState.frequentCustomers.length) {
+          const selectedCustomer = customerSelectionState.frequentCustomers[customerIndex];
+          await selectCustomer(selectedCustomer.name);
+          setPrompt('');
+          setIsLoading(false);
+          return;
+        }
         
-        setMessages(prev => [...prev, { 
-          type: 'bot', 
-          text: regularAiResponse
-        }]);
-        
-        // Check if the response suggests quotation generation
-        if (typeof regularAiResponse === 'string' && regularAiResponse.toLowerCase().includes('quotation')) {
-          setShowConfirmation(true);
+        // Otherwise, treat as new customer name
+        if (prompt.trim()) {
+          await selectCustomer(prompt.trim());
+          setPrompt('');
+          setIsLoading(false);
+          return;
         }
       }
+
+      // Handle special context states
+      if (quotationFlow.askingAboutExistingCustomer) {
+        await handleExistingCustomerResponse(prompt);
+        setPrompt('');
+        setIsLoading(false);
+        return;
+      }
+
+      if (quotationFlow.showingCustomerList) {
+        await handleCustomerSelection(prompt);
+        setPrompt('');
+        setIsLoading(false);
+        return;
+      }
+
+      if (quotationFlow.pendingGeneration) {
+        await handlePDFConfirmation(prompt);
+        setPrompt('');
+        setIsLoading(false);
+        return;
+      }
+
+      // 🎯 NEW INTENT ROUTING SYSTEM - Only when NOT in specific quotation context
+      console.log('🎯 Using new intent routing system for message:', prompt);
+      
+      // Prepare context for intent routing
+      const intentContext = validateAndEnrichContext({
+        quotationActive: quotationFlow.active,
+        quotationData: quotationFlow.data,
+        awaitingConfirmation: quotationFlow.pendingGeneration,
+        hasRecentQuotations: messages.some(m => m.showPDFButtons),
+        hasCustomers: true // Assume true for now, could be dynamic
+      });
+
+      // Route through new intent system
+      const intentResult = await routeIntent(prompt, intentContext);
+      console.log('🎯 Intent routing result:', intentResult);
+
+      // Handle responses based on intent result
+      if (!intentResult.requiresProcessing) {
+        // Direct response - show immediately
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: intentResult.response,
+          showPDFButtons: intentResult.showPDFButtons || false,
+          showFeatures: intentResult.showFeatures || false
+        }]);
+        setPrompt('');
+        setIsLoading(false);
+        return;
+      }
+      
+      // Process different types based on intent result
+      switch (intentResult.processingType) {
+        case "quotation_create":
+          await startSmartCustomerSelection();
+          break;
+          
+        case "guided_quotation":
+          // Set up guided quotation flow
+          setQuotationFlow(prev => ({ 
+            ...prev, 
+            askingAboutExistingCustomer: true,
+            originalPrompt: prompt
+          }));
+          break;
+          
+        case "checklist_quotation":
+          // Start checklist-based quotation
+          if (intentResult.checklistData) {
+            setChecklistData(intentResult.checklistData);
+            setIsChecklistMode(true);
+            setAwaitingMoreItems(false);
+          }
+          break;
+          
+        case "apply_edit":
+          // Apply edit using existing edit system
+          if (quotationFlow.data && intentResult.editData) {
+            const updatedData = applyEditToQuotation(quotationFlow.data, intentResult.editData);
+            setQuotationFlow(prev => ({ ...prev, data: updatedData }));
+          }
+          break;
+          
+        case "knowledge":
+          await handleKnowledgeQuery(prompt);
+          break;
+          
+        case "steel_estimation":
+          // Handle steel estimation using existing system
+          const estimationResult = await handleSteelEstimation(prompt);
+          if (estimationResult.success) {
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: estimationResult.message,
+              isEstimation: true,
+              showPDFButtons: true,
+              quotationData: estimationResult.quotationData
+            }]);
+            
+            if (estimationResult.quotationData) {
+              setQuotationFlow(prev => ({
+                ...prev,
+                data: estimationResult.quotationData,
+                pendingGeneration: true,
+                originalPrompt: prompt
+              }));
+            }
+          } else {
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: estimationResult.message,
+              showPDFButtons: false
+            }]);
+          }
+          break;
+          
+        case "confirm_action":
+        case "continue_quotation":
+          // Handle contextual confirmations
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: "Let's continue! What would you like to do next?"
+          }]);
+          break;
+          
+        default:
+          // Fallback to existing quotation request handler for complex cases
+          await handleQuotationRequest(prompt);
+      }
+
     } catch (error) {
+      console.error('Error in handleSend:', error);
       setMessages(prev => [...prev, { 
         type: 'bot', 
         text: 'Sorry, I encountered an error. Please try again.'
@@ -1295,30 +2533,422 @@ Type "continue", provide missing info, or "start over".`
     }
   };
 
+  // 🧠 KNOWLEDGE QUERY HANDLER
+  const handleKnowledgeQuery = async (userPrompt) => {
+    const knowledgeResponse = generateSteelResponse(userPrompt);
+    
+    if (knowledgeResponse) {
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: knowledgeResponse,
+        showPDFButtons: false
+      }]);
+    } else {
+      // Fallback for questions not in knowledge base
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: `I'd be happy to help with your steel business question! 
+
+For specific technical details, current market rates, or product specifications, I can provide expert guidance. You can also:
+
+• **Ask about steel types**: "TMT vs MS difference"
+• **Request quotations**: "Quote for 5MT steel bars"  
+• **Market insights**: "Current steel rates"
+• **Business advice**: "Steel trading tips"
+
+What specific information are you looking for?`,
+        showPDFButtons: false
+      }]);
+    }
+  };
+
+  // 📋 QUOTATION REQUEST HANDLER  
+  const handleQuotationRequest = async (userPrompt) => {
+    console.log('🔧 Processing quotation request:', userPrompt);
+
+    // Check if this is a steel estimation request
+    if (detectSteelEstimationRequest(userPrompt)) {
+      const estimationResult = await handleSteelEstimation(userPrompt);
+      
+      if (estimationResult.success) {
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: estimationResult.message,
+          isEstimation: true,
+          showPDFButtons: true,
+          quotationData: estimationResult.quotationData
+        }]);
+        
+        if (estimationResult.quotationData) {
+          setQuotationFlow(prev => ({
+            ...prev,
+            data: estimationResult.quotationData,
+            pendingGeneration: true,
+            originalPrompt: userPrompt
+          }));
+        }
+      } else {
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: estimationResult.message,
+          showPDFButtons: false
+        }]);
+      }
+      return;
+    }
+
+    // Try hybrid parsing for regular quotations
+    const aiResponse = await hybridParseQuotation(userPrompt);
+    
+    if (aiResponse && typeof aiResponse === 'object' && aiResponse.customerName && aiResponse.items) {
+      const formattedData = convertToQuotationFormat(aiResponse);
+      const validation = validateCriticalFields(formattedData);
+      
+      if (validation.canProceed) {
+        const finalData = validation.updatedData;
+        const summary = generateQuotationSummary(finalData);
+        
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: `📄 **Quotation Ready for ${finalData.customerName}**\n\n${summary}\n\n🔘 Ready to generate PDF?`,
+          showPDFButtons: true,
+          quotationData: finalData
+        }]);
+        
+        setQuotationFlow(prev => ({
+          ...prev,
+          data: finalData,
+          pendingGeneration: true,
+          originalPrompt: userPrompt
+        }));
+        
+      } else {
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: `🔎 I need some critical information to proceed: ${validation.missingCritical.join(", ")}\n\nPlease provide these essential details.`,
+          showPDFButtons: false
+        }]);
+      }
+    } else {
+      // Start manual quotation flow
+      setQuotationFlow(prev => ({ 
+        ...prev, 
+        askingAboutExistingCustomer: true,
+        originalPrompt: userPrompt
+      }));
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: 'I\'ll help you create a quotation! Would you like to create one for an existing customer? (Yes / No)',
+        showPDFButtons: false
+      }]);
+    }
+  };
+
+  // 👤 EXISTING CUSTOMER RESPONSE HANDLER
+  const handleExistingCustomerResponse = async (userPrompt) => {
+    const intent = detectUserIntent(userPrompt);
+    
+    if (intent === 'affirmative') {
+      const customers = await fetchExistingCustomers();
+      if (customers.length > 0) {
+        setQuotationFlow(prev => ({
+          ...prev,
+          askingAboutExistingCustomer: false,
+          showingCustomerList: true,
+          existingCustomers: customers
+        }));
+        
+        const customerList = customers.map((customer, index) => `${index + 1}. ${customer.name}`).join('\n');
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: `Great! Here are your saved customers:\n\n${customerList}\n\nPlease type the number:`,
+          showPDFButtons: false
+        }]);
+      } else {
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: 'No saved customers found. Let\'s create a new quotation!\n\nWhat is the customer name?',
+          showPDFButtons: false
+        }]);
+        setQuotationFlow(prev => ({ 
+          ...prev, 
+          askingAboutExistingCustomer: false,
+          active: true,
+          step: 0,
+          structuredMode: true
+        }));
+      }
+    } else {
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: 'Perfect! Let\'s create a new quotation.\n\nWhat is the customer name?',
+        showPDFButtons: false
+      }]);
+      setQuotationFlow(prev => ({ 
+        ...prev, 
+        askingAboutExistingCustomer: false,
+        active: true,
+        step: 0,
+        structuredMode: true
+      }));
+    }
+  };
+
+  // 🔘 PDF CONFIRMATION HANDLER  
+  const handlePDFConfirmation = async (userPrompt) => {
+    console.log('🔥 PDF Confirmation handler called with:', userPrompt);
+    const intent = detectUserIntent(userPrompt);
+    console.log('🔥 Detected intent:', intent);
+    
+    if (intent === 'affirmative') {
+      console.log('✅ User confirmed PDF generation, proceeding...');
+      
+      // Immediately set pendingGeneration to false to prevent loops
+      setQuotationFlow(prev => ({ ...prev, pendingGeneration: false }));
+      
+      if (quotationFlow.data.saveCustomer) {
+        await saveCustomer(quotationFlow.data);
+      }
+      await generateQuotationPDF(quotationFlow.data);
+      
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: '✅ **Quotation PDF generated successfully!**\n\nAnything else I can help you with?',
+        showPDFButtons: false
+      }]);
+      
+      // Reset quotation flow
+      setQuotationFlow({
+        active: false,
+        step: 0,
+        data: {
+          customerName: '',
+          saveCustomer: false,
+          products: [],
+          currentProduct: { description: '', qty: '', rate: '' },
+          gst: 18,
+          transport: 'Included',
+          loadingCharges: 'Rs.250 per MT extra',
+          paymentTerms: '',
+          deliveryTerms: '',
+          priceValidity: ''
+        },
+        pendingGeneration: false,
+        originalPrompt: '',
+        askingToSaveCustomer: false,
+        askingAboutExistingCustomer: false,
+        showingCustomerList: false,
+        existingCustomers: [],
+        validationResult: null,
+        awaitingCompletion: false,
+        awaitingValidationDecision: false,
+        awaitingProductConfirmation: false,
+        structuredMode: false,
+        editMode: false,
+        editingDraft: null
+      });
+      
+    } else if (intent === 'negative') {
+      console.log('❌ User declined PDF generation, entering edit mode...');
+      
+      // 🛠️ ACTIVATE EDIT MODE instead of just resetting
+      console.log('🛠️ Activating edit mode with data:', quotationFlow.data);
+      
+      setQuotationFlow(prev => ({ 
+        ...prev, 
+        pendingGeneration: false,
+        editMode: true,
+        editingDraft: { ...prev.data } // Copy current data for editing
+      }));
+      
+      const draftSummary = generateDraftSummary(quotationFlow.data);
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: `🛠️ **Edit Mode Activated**\n\n${draftSummary}`,
+        showPDFButtons: false,
+        isEditMode: true
+      }]);
+      
+      console.log('🛠️ Edit mode should now be active');
+    } else {
+      console.log('⚠️ Neutral response, re-prompting for confirmation');
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: 'Please respond with "yes" to generate the PDF or "no" to edit the quotation.',
+        showPDFButtons: false
+      }]);
+    }
+  };
+
+  // 🛠️ EDIT MODE HANDLER - Process natural language edit commands
+  const handleEditMode = async (userPrompt) => {
+    try {
+      console.log('🛠️ Edit mode handler called with:', userPrompt);
+      console.log('🛠️ Current editing draft:', quotationFlow.editingDraft);
+      
+      const editCommand = parseEditCommand(userPrompt);
+      console.log('🛠️ Parsed edit command:', editCommand);
+      
+      if (editCommand.type === 'unknown') {
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: `❌ I didn't understand that edit command. Here are some examples:
+
+**Customer Updates:**
+• "Change customer name to ABC Corp"
+• "Change name to Shafeel"
+• "Set customer to Ramesh Traders"
+
+**Add Products:**
+• "Add item TMT 12mm - 5MT @ 58+GST"
+• "Add item ISMB 150 - 3MT @ 65+GST"
+
+**Update Terms:**
+• "Update GST to 12%"
+
+**Meta Commands:**
+• "Show current draft"
+• "Done" (to finalize)
+
+Try one of these formats!`,
+          showPDFButtons: false,
+          isEditMode: true
+        }]);
+        return;
+      }
+      
+      if (editCommand.type === 'meta') {
+        switch (editCommand.action) {
+          case 'show_draft':
+            const currentDraft = generateDraftSummary(quotationFlow.editingDraft);
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: currentDraft,
+              showPDFButtons: false,
+              isEditMode: true
+            }]);
+            break;
+            
+          case 'reset':
+            setQuotationFlow(prev => ({
+              ...prev,
+              editMode: false,
+              editingDraft: null,
+              pendingGeneration: false
+            }));
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: '🔄 **Quotation reset!** You can start fresh or create a new quotation.',
+              showPDFButtons: false
+            }]);
+            break;
+            
+          case 'finalize':
+            // Exit edit mode and show final confirmation
+            const finalSummary = generateQuotationSummary(quotationFlow.editingDraft);
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: `🎯 **Final Quotation Ready**\n\n${finalSummary}\n\n🔘 Ready to generate PDF?`,
+              showPDFButtons: true,
+              quotationData: quotationFlow.editingDraft
+            }]);
+            
+            setQuotationFlow(prev => ({
+              ...prev,
+              editMode: false,
+              data: prev.editingDraft, // Apply edited changes
+              pendingGeneration: true
+            }));
+            break;
+            
+          default:
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: '❓ I didn\'t understand that command. Try:\n• "Show current draft"\n• "Done, generate PDF"\n• "Reset quotation"',
+              showPDFButtons: false,
+              isEditMode: true
+            }]);
+        }
+      } else {
+        // Apply the edit to the draft
+        console.log('🛠️ Applying edit to quotation:', editCommand);
+        const editResult = applyEditToQuotation(quotationFlow.editingDraft, editCommand);
+        console.log('🛠️ Edit result:', editResult);
+        
+        setQuotationFlow(prev => ({
+          ...prev,
+          editingDraft: editResult.updatedData
+        }));
+        
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: `${editResult.confirmationMessage}\n\nWhat else would you like to edit? Or type "done" to finalize.`,
+          showPDFButtons: false,
+          isEditMode: true
+        }]);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error in edit mode:', error);
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: '❌ Sorry, I encountered an error processing your edit. Please try again or type "show current draft" to see the current state.',
+        showPDFButtons: false,
+        isEditMode: true
+      }]);
+    }
+  };
+
+  // 📊 QUOTATION SUMMARY GENERATOR
+  const generateQuotationSummary = (quotationData) => {
+    const totalAmount = quotationData.products.reduce((sum, item) => sum + item.amount, 0);
+    const validGst = typeof quotationData.gst === 'number' && !isNaN(quotationData.gst) && quotationData.gst >= 0 ? quotationData.gst : 18;
+    const gstAmount = totalAmount * (validGst / 100);
+    const grandTotal = totalAmount + gstAmount;
+    
+    return `**Products:** ${quotationData.products.length} items
+${quotationData.products.map(p => `• ${p.description}: ${p.qty}kg @ ₹${p.rate} = ₹${p.amount.toLocaleString()}`).join('\n')}
+
+**Subtotal:** ₹${totalAmount.toLocaleString()}
+**GST (${validGst}%):** ₹${gstAmount.toLocaleString()}  
+**Grand Total:** ₹${grandTotal.toLocaleString()}`;
+  };
+
+  // 👥 CUSTOMER SELECTION HANDLER
+  const handleCustomerSelection = async (userPrompt) => {
+    const customerIndex = parseInt(userPrompt.trim()) - 1;
+    if (customerIndex >= 0 && customerIndex < quotationFlow.existingCustomers.length) {
+      const selectedCustomer = quotationFlow.existingCustomers[customerIndex];
+      setQuotationFlow(prev => ({
+        ...prev,
+        showingCustomerList: false,
+        active: true,
+        step: 2,
+        data: {
+          ...prev.data,
+          customerName: selectedCustomer.name,
+          saveCustomer: false
+        },
+        structuredMode: true
+      }));
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: `Perfect! Creating quotation for **${selectedCustomer.name}**.\n\nNow, let's add products. Please enter product description:`,
+        showPDFButtons: false
+      }]);
+    } else {
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: 'Invalid selection. Please enter a valid customer number from the list above:',
+        showPDFButtons: false
+      }]);
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto p-4 h-[calc(100vh-2rem)] flex flex-col">
-      {/* DEBUG: Remove this in production */}
-      <div className="mb-2 p-2 bg-yellow-100 border border-yellow-300 rounded">
-        <button 
-          onClick={createTestData}
-          className="px-3 py-1 bg-yellow-500 text-white rounded text-sm mr-2"
-        >
-          Create Test Data
-        </button>
-        <button 
-          onClick={testRegexParser}
-          className="px-3 py-1 bg-green-500 text-white rounded text-sm mr-2"
-        >
-          Test Regex Parser
-        </button>
-        <button 
-          onClick={testValidationFlow}
-          className="px-3 py-1 bg-purple-500 text-white rounded text-sm mr-2"
-        >
-          Test Validation Flow
-        </button>
-        <span className="text-xs text-yellow-700">Debug: Create test data, then try typing "quote" or test the regex parser</span>
-      </div>
+      {/* Settings Menu */}
+      <SettingsMenu onBusinessInfoUpdated={fetchBusinessInfo} />
       
       <div className="flex-1 overflow-y-auto mb-4 space-y-4">
         {messages.map((message, index) => (
@@ -1330,12 +2960,274 @@ Type "continue", provide missing info, or "start over".`
               className={`max-w-[70%] rounded-lg p-3 ${
                 message.type === 'user'
                   ? 'bg-blue-500 text-white'
-                  : 'bg-gray-200 text-gray-800'
+                  : message.isEditMode
+                    ? 'bg-orange-50 text-gray-800 border border-orange-200'
+                    : 'bg-gray-200 text-gray-800'
               }`}
               style={{ whiteSpace: 'pre-line' }}
             >
               {message.text}
-              {message.type === 'bot' && showConfirmation && index === messages.length - 1 && (
+              
+              {/* 🔘 CONTROLLED PDF BUTTONS - Only show when showPDFButtons is true */}
+              {message.type === 'bot' && message.showPDFButtons && (
+                <div className="mt-4 p-3 bg-gray-50 rounded-lg border">
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={async () => {
+                        // Get the quotation data from the message or current flow state
+                        const quotationData = message.quotationData || quotationFlow.data;
+                        
+                        if (quotationData && quotationData.customerName) {
+                          // Save customer if needed
+                          if (quotationData.saveCustomer) {
+                            await saveCustomer(quotationData);
+                          }
+                          
+                          // Generate PDF
+                          await generateQuotationPDF(quotationData);
+                          
+                          // Add success message
+                          setMessages(prev => [...prev, { 
+                            type: 'bot', 
+                            text: '✅ **Quotation PDF generated successfully!**\n\nAnything else I can help you with?',
+                            showPDFButtons: false
+                          }]);
+                          
+                          // Reset the askingToSaveCustomer state
+                          setQuotationFlow(prev => ({
+                            ...prev,
+                            askingToSaveCustomer: false,
+                            pendingGeneration: false,
+                            data: {
+                              customerName: '',
+                              saveCustomer: false,
+                              products: [],
+                              currentProduct: { description: '', qty: '', rate: '' },
+                              gst: 18,
+                              transport: 'Included',
+                              loadingCharges: 'Rs.250 per MT extra',
+                              paymentTerms: '',
+                              deliveryTerms: '',
+                              priceValidity: ''
+                            },
+                            originalPrompt: '',
+                            validationResult: null,
+                            awaitingCompletion: false,
+                            awaitingProductConfirmation: false,
+                            structuredMode: false,
+                            editMode: false,
+                            editingDraft: null
+                          }));
+                        }
+                      }} 
+                      className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition-colors flex items-center gap-2"
+                    >
+                      ✅ Yes, Generate PDF
+                    </button>
+                    <button 
+                      onClick={() => {
+                        // 🛠️ ACTIVATE EDIT MODE when user clicks "No, Edit"
+                        console.log('🛠️ "No, Edit" button clicked');
+                        console.log('🛠️ Current quotation data:', message.quotationData || quotationFlow.data);
+                        
+                        const quotationData = message.quotationData || quotationFlow.data;
+                        const draftSummary = generateDraftSummary(quotationData);
+                        
+                        setMessages(prev => [...prev, { 
+                          type: 'bot', 
+                          text: `🛠️ **Edit Mode Activated**\n\n${draftSummary}`,
+                          showPDFButtons: false,
+                          isEditMode: true
+                        }]);
+                        
+                        // Activate edit mode in quotation flow
+                        setQuotationFlow(prev => {
+                          const newState = { 
+                            ...prev, 
+                            pendingGeneration: false,
+                            editMode: true,
+                            editingDraft: { ...quotationData }
+                          };
+                          console.log('🛠️ Setting new quotation flow state:', newState);
+                          return newState;
+                        });
+                      }} 
+                      className="px-4 py-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded hover:bg-gray-50 transition-colors flex items-center gap-2"
+                    >
+                      ✏️ No, Edit
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {/* 🎯 SMART CUSTOMER SELECTION UI */}
+              {message.type === 'bot' && message.showCustomerSelection && (
+                <div className="mt-4 space-y-4">
+                  {/* Search Input */}
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={customerSelectionState.searchInput}
+                      onChange={(e) => handleCustomerNameInput(e.target.value)}
+                      placeholder="Type customer name to search..."
+                      className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      autoFocus
+                    />
+                    
+                    {/* Real-time Suggestions Dropdown */}
+                    {customerSelectionState.showSuggestions && customerSelectionState.suggestions.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                        <div className="p-2 bg-gray-50 border-b text-sm text-gray-600 font-medium">
+                          📝 Matching Customers ({customerSelectionState.suggestions.length})
+                        </div>
+                        {customerSelectionState.suggestions.map((customer, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => selectCustomer(customer.name)}
+                            className="w-full text-left p-3 hover:bg-blue-50 border-b border-gray-100 last:border-b-0 transition-colors flex items-center justify-between"
+                          >
+                            <div>
+                              <div className="font-medium text-gray-800">{customer.name}</div>
+                              {customer.place && (
+                                <div className="text-sm text-gray-500">{customer.place}</div>
+                              )}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {customer.frequency || 1} quotes
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Frequently Billed Customers */}
+                  {message.frequentCustomers && message.frequentCustomers.length > 0 && (
+                    <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-blue-600">⭐</span>
+                        <span className="font-medium text-blue-800">Frequently Billed Customers</span>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2">
+                        {message.frequentCustomers.map((customer, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => selectCustomer(customer.name)}
+                            className="text-left p-3 bg-white rounded-lg border border-blue-200 hover:border-blue-400 hover:bg-blue-25 transition-colors"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="font-medium text-gray-800">{customer.name}</div>
+                                {customer.place && (
+                                  <div className="text-sm text-gray-500">{customer.place}</div>
+                                )}
+                              </div>
+                              <div className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
+                                {customer.frequency} quotes
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Manual Entry Button */}
+                  <div className="text-center pt-2">
+                    <button
+                      onClick={() => {
+                        if (customerSelectionState.searchInput.trim()) {
+                          selectCustomer(customerSelectionState.searchInput.trim());
+                        }
+                      }}
+                      disabled={!customerSelectionState.searchInput.trim()}
+                      className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Use "{customerSelectionState.searchInput || 'customer name'}" as New Customer
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {/* 🔄 QUOTATION CONTINUATION OPTIONS - When user goes off-topic */}
+              {message.type === 'bot' && message.showQuotationOptions && (
+                <div className="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-amber-600">⚠️</span>
+                    <span className="font-medium text-amber-800">Quotation in Progress</span>
+                  </div>
+                  <div className="text-sm text-amber-700 mb-3">
+                    Current step: <strong>{message.currentStep}</strong>
+                    {message.contextData?.customerName && (
+                      <span> • Customer: <strong>{message.contextData.customerName}</strong></span>
+                    )}
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        setMessages(prev => [...prev, { 
+                          type: 'user', 
+                          text: 'Yes, continue' 
+                        }]);
+                        setMessages(prev => [...prev, { 
+                          type: 'bot', 
+                          text: getStepPromptMessage(message.currentStep)
+                        }]);
+                      }}
+                      className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
+                    >
+                      ✅ Yes, Continue
+                    </button>
+                    <button
+                      onClick={() => {
+                        setMessages(prev => [...prev, { 
+                          type: 'user', 
+                          text: 'No, start over' 
+                        }]);
+                        setQuotationFlow({
+                          active: false,
+                          step: 0,
+                          data: {
+                            customerName: '',
+                            saveCustomer: false,
+                            products: [],
+                            currentProduct: { description: '', qty: '', rate: '' },
+                            gst: 18,
+                            transport: 'Included',
+                            loadingCharges: 'Rs.250 per MT extra',
+                            paymentTerms: '',
+                            deliveryTerms: '',
+                            priceValidity: ''
+                          },
+                          pendingGeneration: false,
+                          originalPrompt: '',
+                          askingToSaveCustomer: false,
+                          askingAboutExistingCustomer: false,
+                          showingCustomerList: false,
+                          existingCustomers: [],
+                          validationResult: null,
+                          awaitingCompletion: false,
+                          awaitingValidationDecision: false,
+                          awaitingProductConfirmation: false,
+                          structuredMode: false,
+                          editMode: false,
+                          editingDraft: null
+                        });
+                        setMessages(prev => [...prev, { 
+                          type: 'bot', 
+                          text: 'Quotation reset. What would you like to do next?'
+                        }]);
+                      }}
+                      className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex items-center gap-2"
+                    >
+                      ❌ No, Start Over
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {/* Legacy confirmation logic - keep for backward compatibility but this should rarely trigger now */}
+              {message.type === 'bot' && showConfirmation && index === messages.length - 1 && !message.showPDFButtons && (
                 <div className="mt-4 p-3 bg-gray-50 rounded-lg">
                   <p className="text-gray-700 mb-3">Would you like me to generate a quotation PDF for this?</p>
                   <div className="flex gap-3">
@@ -1389,12 +3281,41 @@ Type "continue", provide missing info, or "start over".`
         </div>
       )}
 
+      {/* Quick Action Buttons */}
+      {!quotationFlow.active && !customerSelectionState.active && (
+        <div className="mb-4 p-3 bg-gradient-to-r from-blue-50 to-green-50 rounded-lg border border-blue-200">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-blue-600">⚡</span>
+            <span className="font-medium text-gray-700">Quick Actions</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={async () => {
+                setMessages(prev => [...prev, { type: 'user', text: 'create quotation' }]);
+                await startSmartCustomerSelection();
+              }}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2"
+            >
+              📄 New Quotation
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="border-t pt-4">
         <div className="flex gap-2">
           <textarea
             value={prompt}
             onChange={(e) => handlePromptChange(e.target.value)}
-            placeholder={quotationFlow.active ? "Enter your response..." : "Type your command here... (Try 'create quotation')"}
+            placeholder={
+              customerSelectionState.active
+                ? "Type customer name or select from suggestions above..."
+                : quotationFlow.editMode 
+                  ? "Edit your quotation... (Try: 'Add item: TMT 12mm - 5MT @ 58+GST' or 'Change customer name to ABC Corp')"
+                  : quotationFlow.active 
+                    ? "Enter your response..." 
+                    : "Type your command here... (Try 'create quotation')"
+            }
             className="flex-1 p-3 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[100px]"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -1417,4 +3338,4 @@ Type "continue", provide missing info, or "start over".`
       </div>
     </div>
   );
-} 
+}
