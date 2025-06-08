@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { parsePrompt, parsePromptWithFallback, validateParsedData, formatParsedData } from '../utils/parsePrompt.js';
+import { calculateWeight, getWeightInfo, isValidItem, findSimilarItems } from '../utils/calculateWeight.js';
 
 export default function ChatBot({ businessInfo }) {
   const [prompt, setPrompt] = useState('');
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [quotationData, setQuotationData] = useState(null);
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('en-IN', {
@@ -17,22 +20,28 @@ export default function ChatBot({ businessInfo }) {
   };
 
   const generatePDF = () => {
-    // Use business info from props
+    // Use business info from props or quotation data
     const company = {
       name: businessInfo.businessName,
       address: businessInfo.address,
       gstin: businessInfo.gstin,
       email: businessInfo.email,
     };
-    const documentNumber = 'SAMPLE_QUOTATION';
+    
+    // Generate proper document number with timestamp
+    const timestamp = new Date().getTime().toString().slice(-6);
+    const documentNumber = `QUOT${timestamp}`;
     const date = new Date().toLocaleDateString('en-IN');
-    const customer = 'ABC INDUSTRIES, COIMBATORE';
-    const items = [
+    
+    // Use quotation data if available, otherwise use sample data
+    const customer = quotationData?.customerName || 'ABC INDUSTRIES, COIMBATORE';
+    const items = quotationData?.items || [
       { description: 'MS FLAT 40x6mm', qty: 5000, rate: 52, amount: 260000 },
       { description: 'ISMC 100x50', qty: 3000, rate: 56, amount: 168000 },
     ];
-    const totalQty = items.reduce((sum, item) => sum + item.qty, 0);
-    const taxableAmount = items.reduce((sum, item) => sum + item.amount, 0);
+    
+    const totalQty = items.reduce((sum, item) => sum + parseFloat(item.qty || 0), 0);
+    const taxableAmount = items.reduce((sum, item) => sum + (item.amount || 0), 0);
     const gst = taxableAmount * 0.18;
     const grandTotal = taxableAmount + gst;
     const transport = 'Included';
@@ -47,7 +56,7 @@ export default function ChatBot({ businessInfo }) {
     const doc = new jsPDF();
     let y = 15;
 
-    // Company Name
+    // Company Header - Left side
     doc.setFontSize(18);
     doc.setFont('helvetica', 'bold');
     doc.text(company.name, 14, y);
@@ -60,70 +69,116 @@ export default function ChatBot({ businessInfo }) {
     y += 6;
     doc.text(`Email: ${company.email}`, 14, y);
 
-    // Document number and date (top-right)
+    // Document number and date - Right side with proper spacing
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
-    doc.text('Document #: ', 150, 20);
+    
+    // Document Number
+    const docNumX = 120;
+    const docNumValueX = 170;
+    doc.text('Document #:', docNumX, 20);
     doc.setFont('helvetica', 'normal');
-    doc.text(documentNumber, 180, 20, { align: 'right' });
+    doc.text(documentNumber, docNumValueX, 20);
+    
+    // Date - positioned below document number with proper spacing
     doc.setFont('helvetica', 'bold');
-    doc.text('Date: ', 150, 27);
+    doc.text('Date:', docNumX, 30);
     doc.setFont('helvetica', 'normal');
-    doc.text(date, 180, 27, { align: 'right' });
+    doc.text(date, docNumValueX, 30);
 
-    // To: Customer
-    y += 12;
+    // Add a line separator
+    doc.setLineWidth(0.5);
+    doc.line(14, 45, 196, 45);
+
+    // To: Customer - with proper spacing after header
+    y = 55;
     doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
     doc.text(`To: ${customer}`, 14, y);
-    y += 6;
+    y += 10;
 
     // Items table
     doc.autoTable({
       startY: y,
-      head: [['Description', 'Qty (kg)', 'Rate', 'Amount']],
+      head: [['Description', 'Qty (kg)', 'Rate (₹)', 'Amount (₹)']],
       body: items.map(item => [
         item.description,
-        item.qty,
-        formatCurrency(item.rate),
-        formatCurrency(item.amount)
+        parseFloat(item.qty || 0).toFixed(2),
+        parseFloat(item.rate || 0).toFixed(2),
+        formatCurrency(item.amount || 0).replace('₹', '')
       ]),
       foot: [
-        ['', '', 'Subtotal:', formatCurrency(taxableAmount)],
-        ['', '', 'GST (18%):', formatCurrency(gst)],
-        ['', '', 'Grand Total:', formatCurrency(grandTotal)]
+        ['', '', 'Subtotal:', formatCurrency(taxableAmount).replace('₹', '')],
+        ['', '', 'GST (18%):', formatCurrency(gst).replace('₹', '')],
+        ['', '', 'Grand Total:', formatCurrency(grandTotal).replace('₹', '')]
       ],
       theme: 'grid',
-      headStyles: { fillColor: [41, 128, 185], textColor: 255 },
-      footStyles: { fillColor: [41, 128, 185], textColor: 255 }
+      headStyles: { 
+        fillColor: [41, 128, 185], 
+        textColor: 255,
+        fontSize: 11,
+        halign: 'center'
+      },
+      footStyles: { 
+        fillColor: [41, 128, 185], 
+        textColor: 255,
+        fontSize: 11,
+        fontStyle: 'bold'
+      },
+      styles: {
+        fontSize: 10,
+        cellPadding: 5
+      },
+      columnStyles: {
+        0: { halign: 'left' },
+        1: { halign: 'center' },
+        2: { halign: 'right' },
+        3: { halign: 'right' }
+      }
     });
 
-    y = doc.lastAutoTable.finalY + 10;
+    y = doc.lastAutoTable.finalY + 15;
 
     // Transport and Loading Charges box
     doc.setDrawColor(0);
     doc.setLineWidth(0.5);
-    doc.rect(14, y, 182, 24);
+    doc.setFillColor(248, 249, 250);
+    doc.rect(14, y, 182, 28, 'FD');
+    
     doc.setFont('helvetica', 'bold');
-    doc.text('Transport:', 18, y + 8);
+    doc.setFontSize(11);
+    doc.text('Additional Information:', 18, y + 8);
+    
     doc.setFont('helvetica', 'normal');
-    doc.text(transport, 40, y + 8);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Loading Charges:', 18, y + 16);
-    doc.setFont('helvetica', 'normal');
-    doc.text(loading, 55, y + 16);
-    y += 32;
+    doc.setFontSize(10);
+    doc.text(`Transport: ${transport}`, 18, y + 16);
+    doc.text(`Loading Charges: ${loading}`, 18, y + 22);
+    
+    y += 35;
 
     // Bank Details box
-    doc.rect(14, y, 182, 24);
+    doc.setFillColor(248, 249, 250);
+    doc.rect(14, y, 182, 35, 'FD');
+    
     doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
     doc.text('Bank Details:', 18, y + 8);
+    
     doc.setFont('helvetica', 'normal');
-    doc.text(bank.name, 18, y + 14);
-    doc.text(`Acc No: ${bank.acc}`, 18, y + 19);
-    doc.text(`IFSC Code: ${bank.ifsc}`, 80, y + 19);
-    doc.text(`Branch: ${bank.branch}`, 18, y + 24);
+    doc.setFontSize(10);
+    doc.text(`Account Name: ${bank.name}`, 18, y + 16);
+    doc.text(`Account Number: ${bank.acc}`, 18, y + 22);
+    doc.text(`IFSC Code: ${bank.ifsc}`, 18, y + 28);
+    doc.text(`Branch: ${bank.branch}`, 100, y + 28);
 
-    doc.save('quotation_sample.pdf');
+    // Footer
+    y += 45;
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(9);
+    doc.text('This is a system generated quotation.', 14, y);
+    doc.text(`Generated on: ${new Date().toLocaleString('en-IN')}`, 14, y + 6);
+
+    doc.save(`quotation_${documentNumber}.pdf`);
   };
 
   const QuotationTable = ({ data }) => {
@@ -209,6 +264,190 @@ export default function ChatBot({ businessInfo }) {
     </div>
   );
 
+  const handleSteelEstimation = async (userPrompt) => {
+    try {
+      // Parse the prompt to extract customer and items using enhanced parser
+      const parsedData = await parsePromptWithFallback(userPrompt, true);
+      const validation = validateParsedData(parsedData);
+      
+      if (!validation.success) {
+        return {
+          success: false,
+          message: `I couldn't parse your steel estimation request properly. Here are the issues:\n\n${validation.errors.join('\n')}\n\nPlease provide steel items in format: "ITEM_NAME - QTY Nos @ RATE+GST"`
+        };
+      }
+
+      // Calculate weights and estimate values
+      const estimationResults = {
+        customer: parsedData.customer || 'Unknown Customer',
+        items: [],
+        totalWeight: 0,
+        totalValue: 0,
+        gstAmount: 0,
+        grandTotal: 0,
+        warnings: [],
+        transport: parsedData.transport,
+        loading: parsedData.loading,
+        gst: parsedData.gst || 18
+      };
+
+      parsedData.items.forEach((item, index) => {
+        const { description, quantity, rate } = item;
+        
+        // Check if item exists in our database
+        if (!isValidItem(description)) {
+          // Try to find similar items
+          const similarItems = findSimilarItems(description);
+          if (similarItems.length > 0) {
+            estimationResults.warnings.push(
+              `"${description}" not found. Did you mean: ${similarItems.slice(0, 3).join(', ')}?`
+            );
+          } else {
+            estimationResults.warnings.push(
+              `"${description}" not found in our database. Using manual calculation.`
+            );
+          }
+          
+          // Use manual calculation for unknown items
+          estimationResults.items.push({
+            description,
+            quantity,
+            rate: rate || 0,
+            weight: 0,
+            weightPerUnit: 0,
+            totalWeight: 0,
+            value: quantity * (rate || 0),
+            status: 'unknown_item',
+            matchScore: item.matchScore
+          });
+          
+          estimationResults.totalValue += quantity * (rate || 0);
+          return;
+        }
+
+        // Calculate weight using our utility
+        const totalWeight = calculateWeight(description, quantity, 6); // 6m default length
+        const weightInfo = getWeightInfo(description, 6);
+        const value = quantity * (rate || 0);
+        
+        estimationResults.items.push({
+          description,
+          quantity,
+          rate: rate || 0,
+          weight: totalWeight,
+          weightPerUnit: weightInfo.weightPerUnit || weightInfo.weightPerMeter || 0,
+          totalWeight,
+          value,
+          status: 'found',
+          weightInfo,
+          matchScore: item.matchScore
+        });
+
+        estimationResults.totalWeight += totalWeight;
+        estimationResults.totalValue += value;
+      });
+
+      // Calculate GST
+      estimationResults.gstAmount = estimationResults.totalValue * (estimationResults.gst / 100);
+      estimationResults.grandTotal = estimationResults.totalValue + estimationResults.gstAmount;
+
+      // Add validation warnings
+      if (validation.warnings.length > 0) {
+        estimationResults.warnings.push(...validation.warnings);
+      }
+
+      // Format response
+      let responseMessage = `## Steel Estimation for ${estimationResults.customer}\n\n`;
+      
+      if (parsedData.aiParsed) {
+        responseMessage += `🤖 *Parsed using AI assistance*\n\n`;
+      }
+      
+      if (estimationResults.warnings.length > 0) {
+        responseMessage += `⚠️ **Warnings:**\n${estimationResults.warnings.map(w => `- ${w}`).join('\n')}\n\n`;
+      }
+
+      responseMessage += `**Items Breakdown:**\n`;
+      estimationResults.items.forEach((item, index) => {
+        responseMessage += `\n${index + 1}. **${item.description}**\n`;
+        responseMessage += `   - Quantity: ${item.quantity} Nos\n`;
+        
+        if (item.rate > 0) {
+          responseMessage += `   - Rate: ₹${item.rate} per kg\n`;
+        } else {
+          responseMessage += `   - Rate: Not specified\n`;
+        }
+        
+        if (item.status === 'found') {
+          responseMessage += `   - Weight per unit: ${item.weightPerUnit.toFixed(2)} kg\n`;
+          responseMessage += `   - Total weight: ${item.totalWeight.toFixed(2)} kg\n`;
+        }
+        
+        if (item.matchScore && item.matchScore < 1.0) {
+          responseMessage += `   - Match confidence: ${(item.matchScore * 100).toFixed(1)}%\n`;
+        }
+        
+        if (item.value > 0) {
+          responseMessage += `   - Value: ₹${item.value.toLocaleString()}\n`;
+        }
+      });
+
+      responseMessage += `\n**Summary:**\n`;
+      responseMessage += `- Total Weight: ${estimationResults.totalWeight.toFixed(2)} kg\n`;
+      responseMessage += `- Subtotal: ₹${estimationResults.totalValue.toLocaleString()}\n`;
+      responseMessage += `- GST (${estimationResults.gst}%): ₹${estimationResults.gstAmount.toLocaleString()}\n`;
+      responseMessage += `- **Grand Total: ₹${estimationResults.grandTotal.toLocaleString()}**\n`;
+
+      if (estimationResults.transport) {
+        responseMessage += `\n**Transport:** ${estimationResults.transport}\n`;
+      }
+
+      if (estimationResults.loading) {
+        responseMessage += `**Loading:** ${estimationResults.loading}\n`;
+      }
+
+      // Store quotation data for PDF generation
+      setQuotationData({
+        customerName: estimationResults.customer,
+        items: estimationResults.items.map(item => ({
+          description: item.description,
+          qty: item.totalWeight > 0 ? item.totalWeight.toFixed(2) : item.quantity,
+          rate: item.rate,
+          amount: item.value
+        }))
+      });
+
+      return {
+        success: true,
+        message: responseMessage,
+        showQuotation: true,
+        data: estimationResults
+      };
+
+    } catch (error) {
+      return {
+        success: false,
+        message: `Error processing steel estimation: ${error.message}`
+      };
+    }
+  };
+
+  const detectSteelEstimationRequest = (prompt) => {
+    const steelKeywords = [
+      'ISMB', 'RSJ', 'ISMC', 'ISA', 'HR SHEET', 'CR SHEET', 'MS PIPE', 'MS SQUARE', 'MS RECT', 'MS FLAT', 'MS ROUND',
+      'steel', 'quotation', 'estimate', 'rate', 'nos', '@', '+GST', 'To ', 'customer'
+    ];
+    
+    const hasSteel = steelKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    const hasQuantityRate = /\d+\s*nos?\s*@\s*\d+/i.test(prompt);
+    const hasCustomer = /to\s+[^,\n]+,/i.test(prompt);
+    
+    return hasSteel && (hasQuantityRate || hasCustomer);
+  };
+
   const sendToOpenAI = async (userMessage) => {
     try {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -247,17 +486,41 @@ export default function ChatBot({ businessInfo }) {
       setIsLoading(true);
       setMessages(prev => [...prev, { type: 'user', text: prompt }]);
       
-      const aiResponse = await sendToOpenAI(prompt);
-      
-      // Check if the response is about a quotation
-      if (aiResponse.toLowerCase().includes('quotation')) {
-        setShowConfirmation(true);
+      // Check if this is a steel estimation request
+      if (detectSteelEstimationRequest(prompt)) {
+        console.log('Detected steel estimation request, processing...');
+        const estimationResult = await handleSteelEstimation(prompt);
+        
+        if (estimationResult.success) {
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: estimationResult.message,
+            isEstimation: true
+          }]);
+          
+          if (estimationResult.showQuotation) {
+            setShowConfirmation(true);
+          }
+        } else {
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: estimationResult.message
+          }]);
+        }
+      } else {
+        // Regular AI chat
+        const aiResponse = await sendToOpenAI(prompt);
+        
+        // Check if the response is about a quotation
+        if (aiResponse.toLowerCase().includes('quotation')) {
+          setShowConfirmation(true);
+        }
+        
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: aiResponse
+        }]);
       }
-      
-      setMessages(prev => [...prev, { 
-        type: 'bot', 
-        text: aiResponse
-      }]);
     } catch (error) {
       setMessages(prev => [...prev, { 
         type: 'bot', 

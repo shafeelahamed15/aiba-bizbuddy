@@ -17,7 +17,8 @@ const BusinessInfoForm = () => {
     phone: '',
     bankAccount: '',
     ifsc: '',
-    bankName: ''
+    bankName: '',
+    branch: ''
   });
 
   const handleChange = (e) => {
@@ -51,7 +52,8 @@ const BusinessInfoForm = () => {
           ["phone", "Phone Number"],
           ["bankAccount", "Bank Account Number"],
           ["ifsc", "IFSC Code"],
-          ["bankName", "Bank Name"]
+          ["bankName", "Bank Name"],
+          ["branch", "Bank Branch"]
         ].map(([key, label]) => (
           <div key={key} className="flex flex-col gap-1">
             <label htmlFor={key} className="text-sm font-medium text-gray-700">
