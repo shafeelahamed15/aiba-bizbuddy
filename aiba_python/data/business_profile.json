@@ -1,0 +1,17 @@
+{
+  "company_name": "Your Business Name",
+  "address": "Your Business Address",
+  "city": "Your City",
+  "state": "Your State",
+  "pin_code": "000000",
+  "phone": "+91-XXXXXXXXXX",
+  "email": "business@example.com",
+  "website": "www.yourbusiness.com",
+  "gst_number": "GST_NUMBER",
+  "pan_number": "PAN_NUMBER",
+  "bank_name": "Your Bank Name",
+  "account_number": "XXXXXXXXXX",
+  "ifsc_code": "IFSC_CODE",
+  "setup_completed": false,
+  "created_date": "2025-06-16T21:32:47.730655"
+}

@@ -189,13 +189,13 @@ function convertToQuotationFormat(extractedData) {
     customerName: extractedData.customerName || '',
     customerAddress: extractedData.customerAddress || '',
     customerGSTIN: extractedData.customerGSTIN || '',
-    products: extractedData.products ? extractedData.products.map(item => ({
+    products: (extractedData.products || extractedData.items || []).map(item => ({
       description: item.description || '',
-      qty: parseFloat(item.qty) || 0,
+      qty: parseFloat(item.qty) || parseFloat(item.quantity) || 0,
       uom: item.uom || 'Nos',
       rate: parseFloat(item.rate) || 0,
-      amount: parseFloat(item.amount) || (parseFloat(item.qty) * parseFloat(item.rate))
-    })) : [],
+      amount: parseFloat(item.amount) || (parseFloat(item.qty || item.quantity) * parseFloat(item.rate))
+    })),
     gst: parseFloat(extractedData.gst) || 18,
     transport: extractedData.transport || 'Included',
     loadingCharges: extractedData.loadingCharges || 'Rs.250 per MT extra',
@@ -214,7 +214,7 @@ function generateQuotationSummary(quotationData) {
   let summary = "**Products:**\n";
   let subtotal = 0;
   
-  products.forEach((product, index) => {
+  (products || []).forEach((product, index) => {
     const uom = product.uom || 'Nos';
     summary += `${index + 1}. ${product.description} - ${product.qty} ${uom} @ ₹${product.rate}/${uom} = ₹${product.amount.toLocaleString()}\n`;
     subtotal += product.amount;

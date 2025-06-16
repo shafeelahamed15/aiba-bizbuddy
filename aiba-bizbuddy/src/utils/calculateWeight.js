@@ -1,4 +1,4 @@
-import { sectionWeights } from './sectionWeights.js';
+import { sectionWeights } from '../data/sectionWeights.js';
 
 /**
  * Calculate total weight for a steel item

@@ -16,7 +16,7 @@ export function applyFallbackDefaults(data) {
 }
 
 /**
- * Validate only critical fields required for quotation generation
+ * 🔧 ENHANCED: UOM-aware validation for critical fields
  * @param {object} data - Quotation data
  * @returns {object} Validation result focusing on critical fields only
  */
@@ -32,17 +32,38 @@ export const validateCriticalFields = (data) => {
   if (!data.products && (!data.items || data.items.length === 0)) {
     criticalMissing.push("Item(s)");
   } else {
-    // Validate individual items (use products or items)
+    // 🔧 SMART VALIDATION: Check products based on UOM requirements
     const itemsToValidate = data.products || data.items || [];
+    const uomPreference = data.uomPreference || 'Nos';
+    
     itemsToValidate.forEach((item, index) => {
+      // Always require description and quantity
       if (!item.description || item.description.trim() === "") {
         criticalMissing.push(`Item ${index + 1} Description`);
       }
-      if (!item.quantity && !item.qty) {
+      
+      const quantity = item.quantity || item.qty || item.nos;
+      if (!quantity || quantity <= 0) {
         criticalMissing.push(`Item ${index + 1} Quantity`);
       }
-      if (!item.rate || item.rate <= 0) {
-        criticalMissing.push(`Item ${index + 1} Rate`);
+      
+      // 🎯 UOM-SPECIFIC VALIDATION
+      const itemUom = item.uom || uomPreference;
+      if (itemUom === 'Kgs' || itemUom === 'Kg') {
+        // For weight-based UOM, require weight info
+        if (!item.weightPerUnit && !item.weight && !item.totalWeight) {
+          warnings.push(`Item ${index + 1}: Weight information recommended for Kg-based quotations`);
+        }
+      } else if (itemUom === 'Metres' || itemUom === 'MTR') {
+        // For length-based UOM, require length info
+        if (!item.length && !item.totalMtrs) {
+          warnings.push(`Item ${index + 1}: Length information recommended for Metre-based quotations`);
+        }
+      }
+      
+      // 🔧 FLEXIBLE RATE VALIDATION: Only require rate if not provided elsewhere
+      if (!item.rate && !item.ratePerMtr && !item.ratePerKg && !item.amount) {
+        warnings.push(`Item ${index + 1}: No rate specified - will use default pricing`);
       }
     });
   }
@@ -161,4 +182,74 @@ export const validateMinimumQuotationData = (data) => {
   // Ultra-minimal validation for quick checks
   const itemsToCheck = data.products || data.items || [];
   return !!(data.customerName && itemsToCheck.length > 0);
+};
+
+/**
+ * 🔧 NEW: Enhanced parser result validation 
+ * Validates products based on UOM-specific requirements
+ * @param {object} parseResult - Result from enhanced parser
+ * @returns {boolean} Whether products have valid structure for quotation
+ */
+export const validateEnhancedParserResult = (parseResult) => {
+  if (!parseResult.products || parseResult.products.length === 0) {
+    return false;
+  }
+  
+  const hasValidProducts = parseResult.products.every(p => {
+    // Always require description and quantity
+    if (!p.description || !p.quantity) {
+      return false;
+    }
+    
+    // UOM-specific validation
+    const uom = p.uom || parseResult.uomPreference || 'Nos';
+    
+    if (uom === 'Kgs' || uom === 'Kg') {
+      // For weight-based: require weight info
+      return p.weightPerUnit || p.weight || p.totalWeight;
+    } else if (uom === 'Metres' || uom === 'MTR' || uom === 'Mtrs') {
+      // For length-based: require length info  
+      return p.length || p.totalMtrs;
+    } else {
+      // For other UOMs (Nos, pieces, etc.): just need quantity
+      return p.quantity > 0;
+    }
+  });
+  
+  return hasValidProducts;
+};
+
+/**
+ * 🔧 NEW: Check if quotation can proceed to PDF generation
+ * Less strict than full validation - allows proceeding even without all details
+ * @param {object} data - Quotation data
+ * @returns {object} Can proceed status and reasoning
+ */
+export const canProceedToPDF = (data) => {
+  const issues = [];
+  
+  if (!data.customerName || data.customerName.trim() === "") {
+    issues.push("Missing customer name");
+  }
+  
+  const items = data.products || data.items || [];
+  if (items.length === 0) {
+    issues.push("No products found");
+  }
+  
+  // Check if items have basic structure
+  items.forEach((item, index) => {
+    if (!item.description) {
+      issues.push(`Item ${index + 1} missing description`);
+    }
+    if (!item.quantity && !item.qty && !item.nos) {
+      issues.push(`Item ${index + 1} missing quantity`);
+    }
+  });
+  
+  return {
+    canProceed: issues.length === 0,
+    issues: issues,
+    confidence: issues.length === 0 ? 'high' : 'low'
+  };
 }; 

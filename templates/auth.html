@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIBA - Sign In</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='auth.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <!-- Logo Section -->
+            <div class="auth-header">
+                <h1 class="auth-logo">🤖 AIBA</h1>
+                <p class="auth-subtitle">AI Business Assistant</p>
+            </div>
+
+            <!-- Error Message Display -->
+            {% if error %}
+            <div class="error-banner">
+                <div class="error-content">
+                    {% if error == 'invalid_state' %}
+                        ⚠️ Security error. Please try signing in again.
+                    {% elif error == 'access_denied' %}
+                        🚫 Google sign-in was cancelled.
+                    {% elif error == 'auth_failed' %}
+                        ❌ Google authentication failed. Please try again.
+                    {% elif error == 'login_failed' %}
+                        ❌ Login failed: {{ message }}
+                    {% elif error == 'server_error' %}
+                        🔧 Server error. Please try again later.
+                    {% elif error == 'service_unavailable' %}
+                        ⚠️ Google sign-in is currently unavailable. Please use email/password.
+                    {% elif error == 'google_not_configured' %}
+                        ⚙️ Google sign-in is not configured. Please use email/password or contact support.
+                    {% elif error == 'google_service_error' %}
+                        🔧 Google sign-in service error. Please try again or use email/password.
+                    {% elif error == 'oauth_error' %}
+                        ❌ OAuth error: {{ message }}. Please try again.
+                    {% elif error == 'no_code' %}
+                        ⚠️ No authorization code received. Please try signing in again.
+                    {% else %}
+                        ❌ An error occurred during authentication.
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Tab Buttons -->
+            <div class="auth-tabs">
+                <button class="tab-btn active" onclick="showTab('signin')" id="signinTab">
+                    Sign In
+                </button>
+                <button class="tab-btn" onclick="showTab('signup')" id="signupTab">
+                    Sign Up
+                </button>
+            </div>
+
+            <!-- Sign In Form -->
+            <div class="auth-form" id="signinForm">
+                <!-- Google Sign In Button -->
+                <div class="google-signin-section">
+                    <button class="google-signin-btn" onclick="signInWithGoogle()">
+                        <svg class="google-icon" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                        </svg>
+                        Continue with Google
+                    </button>
+                </div>
+
+                <!-- Divider -->
+                <div class="auth-divider">
+                    <span>or</span>
+                </div>
+
+                <form onsubmit="handleSignIn(event)">
+                    <div class="form-group">
+                        <label for="signinEmail">Email Address</label>
+                        <input 
+                            type="email" 
+                            id="signinEmail" 
+                            class="form-input" 
+                            placeholder="Enter your email"
+                            required
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="signinPassword">Password</label>
+                        <input 
+                            type="password" 
+                            id="signinPassword" 
+                            class="form-input" 
+                            placeholder="Enter your password"
+                            required
+                        >
+                    </div>
+
+                    <button type="submit" class="auth-btn primary" id="signinBtn">
+                        <span class="btn-text">Sign In</span>
+                        <span class="btn-loader" style="display: none;">
+                            <div class="spinner"></div>
+                        </span>
+                    </button>
+                </form>
+
+                <div class="auth-footer">
+                    <p>Don't have an account? 
+                        <a href="#" onclick="showTab('signup')" class="auth-link">Sign up here</a>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Sign Up Form -->
+            <div class="auth-form" id="signupForm" style="display: none;">
+                <!-- Google Sign Up Button -->
+                <div class="google-signin-section">
+                    <button class="google-signin-btn" onclick="signInWithGoogle()">
+                        <svg class="google-icon" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                        </svg>
+                        Sign up with Google
+                    </button>
+                </div>
+
+                <!-- Divider -->
+                <div class="auth-divider">
+                    <span>or</span>
+                </div>
+
+                <form onsubmit="handleSignUp(event)">
+                    <div class="form-group">
+                        <label for="signupName">Full Name</label>
+                        <input 
+                            type="text" 
+                            id="signupName" 
+                            class="form-input" 
+                            placeholder="Enter your full name"
+                            required
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="signupEmail">Email Address</label>
+                        <input 
+                            type="email" 
+                            id="signupEmail" 
+                            class="form-input" 
+                            placeholder="Enter your email"
+                            required
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="signupPassword">Password</label>
+                        <input 
+                            type="password" 
+                            id="signupPassword" 
+                            class="form-input" 
+                            placeholder="Create a password (min 6 characters)"
+                            minlength="6"
+                            required
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="confirmPassword">Confirm Password</label>
+                        <input 
+                            type="password" 
+                            id="confirmPassword" 
+                            class="form-input" 
+                            placeholder="Confirm your password"
+                            required
+                        >
+                    </div>
+
+                    <button type="submit" class="auth-btn primary" id="signupBtn">
+                        <span class="btn-text">Create Account</span>
+                        <span class="btn-loader" style="display: none;">
+                            <div class="spinner"></div>
+                        </span>
+                    </button>
+                </form>
+
+                <div class="auth-footer">
+                    <p>Already have an account? 
+                        <a href="#" onclick="showTab('signin')" class="auth-link">Sign in here</a>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Success/Error Messages -->
+            <div class="message-container" id="messageContainer" style="display: none;">
+                <div class="message" id="messageContent"></div>
+            </div>
+        </div>
+
+        <!-- Demo Info -->
+        <div class="demo-info">
+            <h3>🚀 Welcome to AIBA</h3>
+            <p>Your AI-powered business assistant for creating professional:</p>
+            <ul>
+                <li>📋 <strong>Quotations</strong> - Smart extraction from natural language</li>
+                <li>📦 <strong>Purchase Orders</strong> - Professional document generation</li>
+                <li>💼 <strong>Business Management</strong> - Customer data and profiles</li>
+            </ul>
+            <div class="demo-features">
+                <div class="feature">
+                    <span class="feature-icon">🎨</span>
+                    <div>
+                        <h4>Modern Interface</h4>
+                        <p>Grok-style dark theme with smooth animations</p>
+                    </div>
+                </div>
+                <div class="feature">
+                    <span class="feature-icon">🧠</span>
+                    <div>
+                        <h4>Smart Processing</h4>
+                        <p>Understands complex business requests naturally</p>
+                    </div>
+                </div>
+                <div class="feature">
+                    <span class="feature-icon">📄</span>
+                    <div>
+                        <h4>Professional PDFs</h4>
+                        <p>High-quality documents with your branding</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Google Sign In Function
+        function signInWithGoogle() {
+            console.log('Google Sign In button clicked');
+            showMessage('Redirecting to Google...', 'info');
+            
+            // Test if the endpoint is reachable
+            fetch('/auth/google/debug')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Debug info:', data);
+                    if (data.google_available) {
+                        console.log('Google OAuth is available, proceeding...');
+                        window.location.href = '/auth/google/login';
+                    } else {
+                        console.log('Google OAuth not available:', data);
+                        showMessage('Google OAuth not configured properly', 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('Debug fetch failed:', error);
+                    showMessage('Google OAuth service error', 'error');
+                });
+        }
+
+        // Tab switching
+        function showTab(tab) {
+            const signinForm = document.getElementById('signinForm');
+            const signupForm = document.getElementById('signupForm');
+            const signinTab = document.getElementById('signinTab');
+            const signupTab = document.getElementById('signupTab');
+
+            if (tab === 'signin') {
+                signinForm.style.display = 'block';
+                signupForm.style.display = 'none';
+                signinTab.classList.add('active');
+                signupTab.classList.remove('active');
+            } else {
+                signinForm.style.display = 'none';
+                signupForm.style.display = 'block';
+                signinTab.classList.remove('active');
+                signupTab.classList.add('active');
+            }
+
+            // Hide any previous messages
+            hideMessage();
+        }
+
+        // Handle Sign In
+        async function handleSignIn(event) {
+            event.preventDefault();
+
+            const email = document.getElementById('signinEmail').value;
+            const password = document.getElementById('signinPassword').value;
+            const btn = document.getElementById('signinBtn');
+
+            setLoading(btn, true);
+
+            try {
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('Welcome back! Redirecting...', 'success');
+                    
+                    setTimeout(() => {
+                        if (data.user.profile_completed) {
+                            window.location.href = '/';
+                        } else {
+                            window.location.href = '/profile-setup';
+                        }
+                    }, 1500);
+                } else {
+                    showMessage(data.message, 'error');
+                }
+
+            } catch (error) {
+                showMessage('Connection error. Please try again.', 'error');
+            } finally {
+                setLoading(btn, false);
+            }
+        }
+
+        // Handle Sign Up
+        async function handleSignUp(event) {
+            event.preventDefault();
+
+            const name = document.getElementById('signupName').value;
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const btn = document.getElementById('signupBtn');
+
+            // Validate passwords match
+            if (password !== confirmPassword) {
+                showMessage('Passwords do not match', 'error');
+                return;
+            }
+
+            setLoading(btn, true);
+
+            try {
+                const response = await fetch('/auth/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ name, email, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('Account created! Please sign in.', 'success');
+                    
+                    setTimeout(() => {
+                        showTab('signin');
+                        document.getElementById('signinEmail').value = email;
+                    }, 1500);
+                } else {
+                    showMessage(data.message, 'error');
+                }
+
+            } catch (error) {
+                showMessage('Connection error. Please try again.', 'error');
+            } finally {
+                setLoading(btn, false);
+            }
+        }
+
+        // Utility functions
+        function setLoading(btn, loading) {
+            const text = btn.querySelector('.btn-text');
+            const loader = btn.querySelector('.btn-loader');
+
+            if (loading) {
+                text.style.display = 'none';
+                loader.style.display = 'flex';
+                btn.disabled = true;
+            } else {
+                text.style.display = 'block';
+                loader.style.display = 'none';
+                btn.disabled = false;
+            }
+        }
+
+        function showMessage(message, type) {
+            const container = document.getElementById('messageContainer');
+            const content = document.getElementById('messageContent');
+
+            content.textContent = message;
+            container.className = `message-container ${type}`;
+            container.style.display = 'block';
+
+            // Auto-hide success messages
+            if (type === 'success' || type === 'info') {
+                setTimeout(hideMessage, 3000);
+            }
+        }
+
+        function hideMessage() {
+            const container = document.getElementById('messageContainer');
+            container.style.display = 'none';
+        }
+
+        // Check if user is already logged in
+        window.addEventListener('DOMContentLoaded', async function() {
+            try {
+                const response = await fetch('/auth/check-auth');
+                const data = await response.json();
+
+                if (data.authenticated) {
+                    if (data.user.profile_completed) {
+                        window.location.href = '/';
+                    } else {
+                        window.location.href = '/profile-setup';
+                    }
+                }
+            } catch (error) {
+                console.log('Not authenticated');
+            }
+
+            // Auto-hide error banner after 5 seconds
+            const errorBanner = document.querySelector('.error-banner');
+            if (errorBanner) {
+                setTimeout(() => {
+                    errorBanner.style.opacity = '0';
+                    setTimeout(() => {
+                        errorBanner.style.display = 'none';
+                    }, 300);
+                }, 5000);
+            }
+        });
+
+        // Handle Enter key in forms
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                const activeForm = document.querySelector('.auth-form:not([style*="display: none"])');
+                if (activeForm) {
+                    const form = activeForm.querySelector('form');
+                    if (form) {
+                        form.dispatchEvent(new Event('submit'));
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html> 

@@ -453,7 +453,8 @@ export class QuotationChecklist {
    * Get current quotation summary
    */
   getSummary() {
-    const { customerName, items, gst, transport, loadingCharges, paymentTerms, priceValidity } = this.data;
+    const { customerName, products, gst, transport, loadingCharges, paymentTerms, priceValidity } = this.data;
+    const items = products || this.data.items || [];
     
     let summary = `**📋 Quotation Summary for ${customerName || 'TBD'}**\n\n`;
     

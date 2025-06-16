@@ -45,16 +45,28 @@ class PromptParser {
         /^(?!.*\d+(?:MT|Nos|Kg|@|₹))([^:@\n]{3,50}?)(?:\s*[:\n])/i
       ],
 
-      // ✅ UPGRADED: Product patterns - better capture of "5MT TMT bars @ Rs.58" format
+      // 🔧 ENHANCED: Product patterns for complex multiline formats
       products: [
-        // Priority 1: "5MT TMT bars @ Rs.58" format
+        // Priority 1: Enhanced "MS Channel 75x40x6mm - 6 MTR Length, 140 Nos" format
+        /MS\s+(Flat|Channel|Angle|Pipe|Beam|Sheet|TMT|HR|CR)[^\d]*(\d{2,4}x\d{1,4}x?\d{0,4}(?:mm)?)[^\d]*(\d+)\s*MTR[^\d]*(\d+)\s*Nos/gi,
+        
+        // Priority 2: "5MT TMT bars @ Rs.58" format (existing)
         /(\d+(?:\.\d+)?)\s*(MT|Nos|Kg|pcs|pieces?|ton|tonnes?)\s+([^@\n]+?)\s*@\s*(?:Rs\.?|₹)\s*(\d+(?:\.\d+)?)/gi,
-        // Priority 2: "TMT bars 5MT @ 58" format  
+        
+        // Priority 3: "TMT bars 5MT @ 58" format (existing)
         /([A-Za-z][^@\n\d]{2,40}?)\s+(\d+(?:\.\d+)?)\s*(MT|Nos|Kg|pcs|pieces?|ton|tonnes?)\s*@\s*(?:Rs\.?|₹)?\s*(\d+(?:\.\d+)?)/gi,
-        // Priority 3: "TMT bars - 5MT @ ₹58" format
+        
+        // Priority 4: "TMT bars - 5MT @ ₹58" format (existing)
         /([A-Za-z][^-@\n]{2,50}?)\s*-\s*(\d+(?:\.\d+)?)\s*(MT|Nos|Kg|pcs|pieces?|ton|tonnes?)\s*@\s*(?:Rs\.?|₹)?\s*(\d+(?:\.\d+)?)/gi,
-        // Priority 4: Flexible format with rate unit
-        /([A-Za-z][^@\n]{2,50}?)\s*(?:-|:)?\s*(\d+(?:\.\d+)?)\s*(MT|Nos|Kg|pcs|pieces?|ton|tonnes?)\s*@\s*(?:Rs\.?|₹)?\s*(\d+(?:\.\d+)?)(?:\/([A-Za-z]+))?/gi
+        
+        // Priority 5: Flexible multiline tolerant format
+        /([A-Za-z][^@\n]{2,50}?)\s*(?:-|:)?\s*(\d+(?:\.\d+)?)\s*(MT|Nos|Kg|pcs|pieces?|ton|tonnes?)\s*@\s*(?:Rs\.?|₹)?\s*(\d+(?:\.\d+)?)(?:\/([A-Za-z]+))?/gi,
+        
+        // Priority 6: MS product variations without rates
+        /(MS\s+(?:Channel|Flat|Angle|Pipe|Beam|Sheet|TMT|HR|CR)\s+\d+x\d+(?:x\d+)?(?:mm)?)\s*-\s*(\d+(?:\.\d+)?)\s*(MTR?|Nos)\s*(?:Length,?\s*)?(\d+)\s*(Nos|MTR?)/gi,
+        
+        // Priority 7: Super flexible fallback for any product with dimensions
+        /([A-Za-z\s]+\d+x\d+(?:x\d+)?[^\d]*)\s*-?\s*(\d+(?:\.\d+)?)\s*(MTR?|Nos)[^\d]*(\d+)\s*(Nos|MTR?)/gi
       ],
 
       // GST patterns
@@ -167,6 +179,23 @@ class PromptParser {
   }
 
   /**
+   * 🔧 NEW: Smarter preprocessor for multiline input normalization
+   * Handles complex multiline product descriptions properly
+   */
+  normalizePrompt(input) {
+    console.log('🔧 Normalizing multiline prompt...');
+    
+    return input
+      .replace(/\n+/g, ' ')              // remove line breaks
+      .replace(/\s{2,}/g, ' ')           // normalize spaces
+      .replace(/,\s*/g, ', ')            // fix comma spacing
+      .replace(/–/g, '-')                // normalize dashes
+      .replace(/\s*-\s*/g, ' - ')        // normalize dash spacing
+      .replace(/\s*x\s*/g, 'x')          // normalize dimension separators
+      .trim();
+  }
+
+  /**
    * Extract customer name from text
    */
   extractCustomerName(text) {
@@ -189,47 +218,186 @@ class PromptParser {
   }
 
   /**
-   * Extract products/items from text - ✅ UPGRADED with OpenAI Few-Shot Prompting
+   * Extract products/items from text - 🔧 ENHANCED with smarter fallback parsing
    */
   async extractProducts(text) {
     console.log('🔍 PromptParser: Extracting products from text');
     
     let products = [];
     
-    // ✅ Step 1: Clean and prepare text for parsing
-    const cleanedText = this.prepareTextForMultilineParsing(text);
-    console.log('🧹 Cleaned text for parsing:', cleanedText);
+    // 🔧 Step 1: Normalize multiline input using the new preprocessor
+    const normalizedText = this.normalizePrompt(text);
+    console.log('📝 Normalized text:', normalizedText);
     
-    // ✅ Step 2: Try OpenAI few-shot prompting first for complex multiline cases
-    try {
-      if (this.isComplexMultilineFormat(cleanedText)) {
-        console.log('🤖 Detected complex format, trying OpenAI few-shot parsing...');
-        const aiProducts = await this.extractProductsWithOpenAI(cleanedText);
-        if (aiProducts && aiProducts.length > 0) {
-          products = aiProducts;
-          console.log(`✅ OpenAI extracted ${products.length} products`);
+    // Step 2: Try enhanced regex patterns first
+    products = this.extractProductsWithEnhancedRegex(normalizedText);
+    console.log('🔍 Enhanced regex extraction result:', products.length, 'products found');
+    
+    // 🔧 Step 3: If regex fails, use OpenAI fallback
+    if (products.length === 0) {
+      console.log('⚠️ Regex failed, trying OpenAI fallback parsing...');
+      try {
+        products = await this.extractProductsWithOpenAIFallback(normalizedText);
+        console.log('🤖 OpenAI fallback result:', products.length, 'products found');
+      } catch (error) {
+        console.error('❌ OpenAI fallback failed:', error.message);
+        // Final fallback to original logic
+        products = this.extractStandardProducts(normalizedText);
+      }
+    }
+    
+    return products;
+  }
+
+  /**
+   * 🔧 NEW: Enhanced regex extraction with smart pattern matching
+   */
+  extractProductsWithEnhancedRegex(text) {
+    console.log('🎯 Using enhanced regex patterns for extraction');
+    const products = [];
+    
+    // Try each pattern in priority order
+    for (let i = 0; i < this.patterns.products.length; i++) {
+      const pattern = this.patterns.products[i];
+      pattern.lastIndex = 0; // Reset regex state
+      
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        let product;
+        
+        // Handle different match structures based on pattern
+        if (i === 0) {
+          // MS Channel pattern: MS Channel 75x40x6mm - 6 MTR Length, 140 Nos
+          product = {
+            description: `MS ${match[1]} ${match[2]}`,
+            length: parseFloat(match[3]) || 6,
+            quantity: parseInt(match[4]) || 1,
+            uom: 'Metres',
+            originalUOM: 'Nos',
+            rate: null,
+            patternUsed: i + 1
+          };
+        } else if (i >= 5) {
+          // MS product variations without rates
+          product = {
+            description: match[1].trim(),
+            length: parseFloat(match[2]) || 6,
+            quantity: parseInt(match[4]) || 1,
+            uom: match[3].toLowerCase().includes('mtr') ? 'Metres' : match[3],
+            originalUOM: match[5],
+            rate: null,
+            patternUsed: i + 1
+          };
+        } else {
+          // Standard patterns with rates
+          product = this.parseStandardMatch(match);
+          product.patternUsed = i + 1;
+        }
+        
+        // Validate and clean product
+        if (product && product.description && product.quantity > 0) {
+          product.description = this.cleanDescription(product.description);
+          
+          // Avoid duplicates
+          const isDuplicate = products.some(p => 
+            p.description.toLowerCase() === product.description.toLowerCase() &&
+            p.quantity === product.quantity
+          );
+          
+          if (!isDuplicate) {
+            products.push(product);
+            console.log(`✅ Extracted with pattern ${i + 1}:`, product);
+          }
         }
       }
+      
+      // If we found products with this pattern, don't try subsequent patterns
+      if (products.length > 0) {
+        console.log(`🎯 Success with pattern ${i + 1}, stopping search`);
+        break;
+      }
+    }
+    
+    return products;
+  }
+
+  /**
+   * 🔧 NEW: OpenAI fallback parsing when regex fails
+   */
+  async extractProductsWithOpenAIFallback(text) {
+    console.log('🤖 Attempting OpenAI fallback parsing...');
+    
+    const prompt = this.buildOpenAIExtractionPrompt(text);
+    
+    try {
+      // For now, use a mock response (replace with actual OpenAI call when API is available)
+      const response = this.mockOpenAIProductExtraction(text);
+      return response;
     } catch (error) {
-      console.warn('⚠️ OpenAI parsing failed, falling back to regex:', error.message);
+      console.error('❌ OpenAI fallback failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 🔧 NEW: Build optimized prompt for OpenAI product extraction
+   */
+  buildOpenAIExtractionPrompt(userText) {
+    return `You are a quotation parser. Extract the following fields from the user prompt:
+- customerName
+- products: [{ description, quantity, uom, rate }]
+- gst
+- transport
+
+Example input: "Quote to ABC Industries for ISMC 100x50 – 5 MT at ₹56/kg. GST 18%. Transport extra."
+Example output:
+{
+  "customerName": "ABC Industries",
+  "products": [
+    { "description": "ISMC 100x50", "quantity": 5000, "uom": "KGS", "rate": 56 }
+  ],
+  "gst": 18,
+  "transport": "Extra"
+}
+
+If UOM is 'MT', multiply quantity by 1000 and set UOM to 'KGS'. If GST or transport is missing, default to 18 and 'Not specified'. Always return valid JSON. Return ONLY the JSON object, no other text.`;
+  }
+
+  /**
+   * 🔧 NEW: Mock OpenAI response (replace with actual API call)
+   */
+  mockOpenAIProductExtraction(text) {
+    console.log('🔄 Using mock OpenAI extraction (replace with real API)');
+    
+    // Smart extraction based on common patterns
+    const products = [];
+    
+    // Look for MS Channel patterns specifically
+    const channelMatches = text.matchAll(/MS\s+Channel\s+(\d+)\s*x\s*(\d+)\s*x?\s*(\d+)?(?:mm)?\s*[-–]\s*(\d+)\s*MTR.*?(\d+)\s*Nos/gi);
+    for (const match of channelMatches) {
+      products.push({
+        description: `MS Channel ${match[1]}x${match[2]}x${match[3] || '6'}mm`,
+        length: parseInt(match[4]) || 6,
+        quantity: parseInt(match[5]) || 1,
+        uom: 'Metres',
+        rate: null
+      });
     }
     
-    // ✅ Step 3: Fallback to regex-based parsing if OpenAI failed or not used
-    if (products.length === 0) {
-      console.log('🔄 Using regex fallback parsing...');
-      const singleLineProducts = this.extractStandardProducts(cleanedText);
-      const multiLineProducts = this.extractMultilineProducts(cleanedText);
-      products = [...singleLineProducts, ...multiLineProducts];
+    // Look for MS Flat patterns
+    const flatMatches = text.matchAll(/MS\s+Flat\s+(\d+)\s*x\s*(\d+)(?:mm)?\s*[-–]\s*(\d+)\s*MTR.*?(\d+)\s*Nos/gi);
+    for (const match of flatMatches) {
+      products.push({
+        description: `MS Flat ${match[1]}x${match[2]}mm`,
+        length: parseInt(match[3]) || 6,
+        quantity: parseInt(match[4]) || 1,
+        uom: 'Metres',
+        rate: null
+      });
     }
     
-    // ✅ Step 4: Apply intelligent rate inference and section mapping
-    const productsWithRates = this.applyRateInference(products, cleanedText);
-    
-    // ✅ Step 5: Ensure no products are blocked from PDF generation
-    const validatedProducts = this.ensurePDFReadyProducts(productsWithRates);
-    
-    console.log(`✅ Final extracted ${validatedProducts.length} products total`);
-    return validatedProducts;
+    console.log('🔄 Mock extraction found:', products.length, 'products');
+    return products;
   }
 
   /**

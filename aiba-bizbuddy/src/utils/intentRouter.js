@@ -9,6 +9,47 @@ import { handleEdit } from '../intents/handleEdit.js';
 import { handleCasualChat } from '../intents/handleCasualChat.js';
 
 /**
+ * Enhanced Intent Detection from User Prompt
+ * Scans for specific trigger keywords to identify quotation vs purchase order requests
+ */
+export function detectIntentFromPrompt(prompt) {
+  const lower = prompt.toLowerCase();
+
+  // Purchase Order Detection
+  if (
+    lower.includes("purchase order") ||
+    lower.includes("create po") ||
+    lower.includes("generate po") ||
+    lower.includes("make po") ||
+    lower.includes("order to") ||
+    lower.includes("raise po") ||
+    lower.includes("send po") ||
+    lower.includes("new po") ||
+    lower.includes("po for") ||
+    lower.includes("purchase order for")
+  ) {
+    return "purchase_order";
+  }
+
+  // Quotation Detection
+  if (
+    lower.includes("quotation") ||
+    lower.includes("quote") ||
+    lower.includes("generate quotation") ||
+    lower.includes("send quote") ||
+    lower.includes("create quotation") ||
+    lower.includes("quote for") ||
+    lower.includes("quotation for") ||
+    lower.includes("price quote") ||
+    lower.includes("estimate")
+  ) {
+    return "quotation";
+  }
+
+  return "unknown";
+}
+
+/**
  * Main router function - coordinates intent classification and handling
  * This is the entry point for all chatbot message processing
  */
@@ -16,21 +57,50 @@ export async function routeIntent(message, context = {}) {
   console.log('🎯 Intent Router processing:', message);
 
   try {
-    // Step 1: Classify the user intent
-    const intent = await classifyIntent(message);
-    console.log(`🏷️ Classified as: ${intent}`);
+    // Step 1: First check for specific quotation/PO intent detection
+    const specificIntent = detectIntentFromPrompt(message);
+    console.log(`🔍 Specific intent detected: ${specificIntent}`);
 
-    // Step 2: Add intent to context for handler awareness
-    const enrichedContext = {
-      ...context,
-      detectedIntent: intent,
-      timestamp: new Date().toISOString()
-    };
+    let intent;
+    let enrichedContext;
+
+    // Step 2: Handle specific intents or fallback to general classification
+    if (specificIntent === "purchase_order") {
+      intent = "purchase_order_intent";
+      enrichedContext = {
+        ...context,
+        detectedIntent: intent,
+        specificFlow: "purchase_order",
+        timestamp: new Date().toISOString()
+      };
+    } else if (specificIntent === "quotation") {
+      intent = "quotation_intent";
+      enrichedContext = {
+        ...context,
+        detectedIntent: intent,
+        specificFlow: "quotation",
+        timestamp: new Date().toISOString()
+      };
+    } else {
+      // Fallback to general intent classification
+      intent = await classifyIntent(message);
+      console.log(`🏷️ General classification: ${intent}`);
+      
+      enrichedContext = {
+        ...context,
+        detectedIntent: intent,
+        timestamp: new Date().toISOString()
+      };
+    }
 
     // Step 3: Route to appropriate handler based on intent
     let result;
     
     switch (intent) {
+      case 'purchase_order_intent':
+        result = await handlePurchaseOrderIntent(message, enrichedContext);
+        break;
+        
       case 'quotation_intent':
         result = await handleQuotation(message, enrichedContext);
         break;
@@ -54,6 +124,7 @@ export async function routeIntent(message, context = {}) {
       intent,
       routingMetadata: {
         classifiedAs: intent,
+        specificIntent: specificIntent,
         handledBy: getHandlerName(intent),
         confidence: await getIntentConfidence(message),
         timestamp: enrichedContext.timestamp
@@ -72,6 +143,41 @@ export async function routeIntent(message, context = {}) {
       error: error.message
     };
   }
+}
+
+/**
+ * Handle Purchase Order Intent
+ * Routes to purchase order creation flow
+ */
+async function handlePurchaseOrderIntent(message, context) {
+  console.log('🛒 Handling Purchase Order intent:', message);
+  
+  return {
+    success: true,
+    response: null, // Will be handled by purchase order flow in ChatBot component
+    requiresProcessing: true,
+    processingType: "purchase_order_create",
+    intent: "purchase_order_intent",
+    flowType: "purchase_order",
+    metadata: {
+      triggerMessage: message,
+      detectedKeywords: extractPOKeywords(message),
+      timestamp: context.timestamp
+    }
+  };
+}
+
+/**
+ * Extract Purchase Order related keywords for metadata
+ */
+function extractPOKeywords(message) {
+  const lower = message.toLowerCase();
+  const poKeywords = [
+    "purchase order", "create po", "generate po", "make po", 
+    "order to", "raise po", "send po", "new po", "po for"
+  ];
+  
+  return poKeywords.filter(keyword => lower.includes(keyword));
 }
 
 /**
@@ -169,6 +275,7 @@ function containsQuestionWords(text) {
  */
 function getHandlerName(intent) {
   const handlerMap = {
+    'purchase_order_intent': 'PurchaseOrderHandler',
     'quotation_intent': 'QuotationHandler',
     'edit_intent': 'EditHandler', 
     'casual_intent': 'CasualChatHandler',

@@ -267,7 +267,7 @@ export function exportChecklistData(checklist) {
     customerName: data.customerName || '',
     customerAddress: '',
     customerGSTIN: '',
-    products: data.items.map(item => ({
+    products: (data.products || data.items || []).map(item => ({
       description: item.description,
       qty: item.qty,
       rate: item.rate,

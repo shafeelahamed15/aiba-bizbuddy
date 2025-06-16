@@ -6,11 +6,20 @@ import { db } from '../firebaseconfig';
 import { useAuth } from '../context/AuthContext';
 import { savePromptHistory } from '../utils/promptLogger';
 import { parseQuotationPrompt } from '../utils/parseQuotationInput';
-import { validateQuotationData, getValidationMessage, validateMinimumQuotationData, validateCriticalFields, getCriticalValidationMessage, applyFallbackDefaults } from '../utils/validateQuotationInput';
+import { parseUnstructuredQuotation, formatQuotationDisplay } from '../utils/unstructuredQuotationParser';
+import { parsePromptToQuoteEnhanced } from '../utils/enhancedPromptParser';
+import { formatQuotationWithUOM, generateQuotationDisplayText } from '../utils/quotationFormatter';
+import { validateQuotationData, getValidationMessage, validateMinimumQuotationData, validateCriticalFields, getCriticalValidationMessage, applyFallbackDefaults, validateEnhancedParserResult, canProceedToPDF } from '../utils/validateQuotationInput';
 import { parsePromptWithFallback, validateParsedData, formatParsedData } from '../utils/parsePrompt';
 import { calculateWeight, getWeightInfo, isValidItem, findSimilarItems } from '../utils/calculateWeight';
 import { detectGreeting, detectQuestion, detectQuotationRequest, generateSteelResponse } from '../utils/steelKnowledge';
-  import { routeIntent, validateAndEnrichContext } from '../utils/intentRouter';
+  import { routeIntent, validateAndEnrichContext, detectIntentFromPrompt } from '../utils/intentRouter';
+import { 
+  parsePurchaseOrderPrompt, 
+  parseWithOpenAI, 
+  isLongFormPOPrompt, 
+  generatePOConfirmation 
+} from '../utils/parsePurchaseOrderPrompt';
   import { handleChecklistQuotation, handleChecklistCommand, isChecklistCommand, exportChecklistData } from '../intents/handleChecklistQuotation';
 import promptParser from '../utils/promptParser';
 import chatbotStateManager from '../utils/chatbotStateManager';
@@ -18,63 +27,55 @@ import suggestionManager from '../utils/suggestionManager.jsx';
 import SettingsMenu from './SettingsMenu';
 import CleanBusinessInfo from './CleanBusinessInfo';
 
-// 🧠 ADVANCED INPUT CLASSIFIER - Smarter than previous detection
+// 🧠 ENHANCED INPUT CLASSIFIER - Uses advanced intent detection
 function classifyUserInput(message) {
   const text = message.toLowerCase().trim();
 
+  // 🎯 STEP 1: Use enhanced intent detection for quotation/PO identification
+  const specificIntent = detectIntentFromPrompt(message);
+  console.log(`🔍 Enhanced intent detection result: ${specificIntent}`);
+
+  // Handle specific intents first (highest priority)
+  if (specificIntent === "purchase_order") {
+    return "purchase_order_create";
+  }
+  
+  if (specificIntent === "quotation") {
+    return "quotation_create";
+  }
+
+  // 🎯 STEP 2: Fallback to general classification for other intents
+  
   // Casual conversation triggers
   const casualTriggers = ["hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "sure", "fine", "great", "cool", "yo", "sup", "howdy"];
   
   // Question triggers
   const questionTriggers = ["what", "how", "when", "can", "do", "is", "are", "why", "which", "where", "who"];
   
-  // Quotation triggers (more comprehensive)
+  // Additional quotation triggers for edge cases not caught by enhanced detection
   const quotationTriggers = [
-    "quote", "quotation", "estimate", "price", "rate", "cost",
     "mt", "tonnes", "tons", "kg", "nos", "pcs", "pieces",
     "ismb", "ismc", "isa", "tmt", "hr sheet", "cr sheet", "ms pipe",
     "@", "+gst", "delivery", "transport"
   ];
 
-  // Check for specific quotation creation commands
-  const quotationCommands = [
-    "create quote", "create quotation", "generate quotation", "new quotation"
-  ];
-
-  // Check for purchase order creation commands
-  const purchaseOrderCommands = [
-    "create purchase order", "create po", "new purchase order", "new po", "purchase order", "generate po"
-  ];
-
-  // Priority-based classification
-  
-  // 1. Check for purchase order creation commands first (highest priority)
-  if (purchaseOrderCommands.some(command => text.includes(command))) {
-    return "purchase_order_create";
-  }
-  
-  // 2. Check for quotation creation commands (second highest priority)
-  if (quotationCommands.some(command => text.includes(command))) {
-    return "quotation_create";
-  }
-  
-  // 2. Check for quotation requests (second priority)
+  // Check for quotation patterns that might have been missed
   if (
     quotationTriggers.some(trigger => text.includes(trigger)) ||
     text.match(/\d+\s?(nos|pcs|mt|tons?|kgs?|kg)/i) ||
     text.match(/@\s?[\d.]+/) ||
-    text.includes("create quotation") ||
-    text.match(/to\s+[^,\n]+,/i)
+    text.match(/₹\s?[\d.,]+/) ||
+    text.match(/to\s+[^,\n]+,/i) // "to Company Name,"
   ) {
     return "quotation";
   }
   
-  // 2. Check for casual responses
+  // Check for casual responses
   if (casualTriggers.some(phrase => text === phrase || text.includes(phrase))) {
     return "casual";
   }
   
-  // 3. Check for questions
+  // Check for questions
   if (
     questionTriggers.some(word => text.startsWith(word)) || 
     text.endsWith("?") ||
@@ -86,6 +87,48 @@ function classifyUserInput(message) {
   }
 
   return "unknown";
+}
+
+// 🔄 Transform long-form PO data to match PDF generation format
+function transformLongFormPOData(parsedData) {
+  console.log('🔄 Transforming parsed PO data:', parsedData);
+  
+  const transformed = {
+    voucherNumber: 'PO' + Date.now().toString().slice(-6), // Generate unique PO number
+    referenceNumber: parsedData.referenceNumber || '',
+    referenceDate: parsedData.referenceDate || new Date().toLocaleDateString('en-GB'),
+    dispatchedThrough: parsedData.dispatchThrough || '',
+    modeOfPayment: parsedData.paymentTerms || '',
+    destination: parsedData.destination || '',
+    termsOfDelivery: parsedData.deliveryTerms || '',
+    supplier: {
+      name: parsedData.supplierName || 'Supplier Name',
+      address: parsedData.supplierLocation || '',
+      gstin: '',
+      state: '',
+      stateCode: ''
+    },
+    items: parsedData.items?.map(item => ({
+      description: item.description || '',
+      qty: parseFloat(item.quantity) || 0,
+      unit: item.unit || 'nos',
+      rate: parseFloat(item.rate) || 0,
+      amount: parseFloat(item.amount) || (parseFloat(item.quantity) * parseFloat(item.rate))
+    })) || [],
+    gstRate: parsedData.gstRate || 18,
+    remarks: parsedData.remarks || ''
+  };
+  
+  // Calculate totals
+  const subtotal = transformed.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+  const gstAmount = subtotal * (transformed.gstRate / 100);
+  const totalAmount = subtotal + gstAmount;
+  
+  transformed.gstAmount = gstAmount;
+  transformed.totalAmount = totalAmount;
+  
+  console.log('✅ Transformed PO data:', transformed);
+  return transformed;
 }
 
 // 🎯 MAIN CHAT RESPONSE HANDLER - Controls conversation flow
@@ -704,7 +747,9 @@ export default function ChatBot() {
       currentItem: { description: '', qty: '', unit: '', rate: '', amount: '' },
       gstRate: 18
     },
-    pendingGeneration: false
+    pendingGeneration: false,
+    pendingConfirmation: false,
+    originalPrompt: ''
   });
 
   const purchaseOrderSteps = [
@@ -904,41 +949,56 @@ export default function ChatBot() {
       active: true,
       step: 0,
       data: {
-        supplier: { name: '', address: '', gstin: '' },
-        voucherNumber: '',
-        referenceNumber: '',
-        referenceDate: '',
-        dispatch: '',
-        paymentTerms: '',
-        otherReferences: '',
-        destination: '',
-        deliveryTerms: '',
-        items: [],
-        currentItem: { description: '', qty: '', unit: '', rate: '', amount: '' },
-        gstRate: 18
+        purchaseOrder: {
+          voucherNumber: '',
+          referenceNumber: '',
+          referenceDate: '',
+          dispatchedThrough: '',
+          modeOfPayment: '',
+          otherReferences: '',
+          destination: '',
+          termsOfDelivery: '',
+          supplier: {
+            name: '',
+            address: '',
+            gstin: '',
+            state: '',
+            stateCode: ''
+          },
+          shipTo: {
+            name: '',
+            address: ''
+          },
+          items: [],
+          gstRate: 18,
+          gstAmount: 0,
+          totalAmount: 0,
+          amountInWords: '',
+          termsNote: 'This is a computer-generated purchase order and does not require a signature.'
+        }
       },
       pendingGeneration: false
     });
 
     setMessages(prev => [...prev, {
       type: 'bot',
-      text: '🛒 **Purchase Order Creation Started**\n\nGreat! Let\'s create a Purchase Order.\n\n**Step 1:** Who is the supplier (Bill From)?\nPlease provide:\n• Supplier Name\n• Address\n• GSTIN (if available)'
+      text: '🛒 **Purchase Order Creation Started**\n\nGreat! Let\'s create a comprehensive Purchase Order for your steel business.\n\n' + getPOStepPrompt(0)
     }]);
   };
 
   const getPOStepPrompt = (step) => {
     const prompts = {
-      0: '🏢 **Supplier Information**\nWho is the supplier (Bill From)?\nPlease provide:\n• Supplier Name\n• Address\n• GSTIN (if available)',
-      1: '📄 **Voucher Number**\nWhat is the voucher number for this purchase order?',
-      2: '🔗 **Reference Details**\nWhat is the reference number and date?\n(Example: REF001, 2024-01-15)',
-      3: '🚚 **Dispatch Information**\nHow is it dispatched?\n(Example: By Road, By Rail, Courier, etc.)',
-      4: '💳 **Payment Terms**\nWhat is the mode/terms of payment?\n(Example: Cash, Bank Transfer, Credit 30 days, etc.)',
-      5: '📋 **Other References**\nAny other references?\n(Optional - you can skip by typing "none" or "skip")',
-      6: '📍 **Destination**\nWhat is the destination address?',
-      7: '📦 **Delivery Terms**\nWhat are the terms of delivery?\n(Example: FOB, CIF, Door delivery, etc.)',
-      8: '📝 **Items**\nPlease enter the item details:\n• Description\n• Quantity\n• Unit (MT, KG, PCS, etc.)\n• Rate per unit\n\n(You can add multiple items)',
-      9: '💰 **GST Rate**\nWhat is the GST rate? (Default: 18%)',
-      10: '✅ **Confirmation**\nReady to generate Purchase Order PDF?'
+      0: '🟩 **Step 1: Supplier (Bill From)**\n\nPlease enter the Supplier (Bill From) details:\n• Name\n• Address\n• GSTIN (if available)\n• State / State Code\n\n*Example:*\n```\nABC Steel Corporation\n123 Industrial Area, Phase-2\nNew Delhi - 110020\n07ABCDE1234F1Z5\nDelhi / 07\n```',
+      1: '🟩 **Step 2: Voucher Info**\n\nWhat is the Voucher Number?\n\n*Example:* PO/2025/001',
+      2: '🟩 **Step 2: Reference Info**\n\nEnter Reference Number and Date\n\n*Example:* REF123 / 08-06-2025',
+      3: '🟩 **Step 3: Dispatch Info**\n\nDispatched Through? \n\n*Examples:* Lorry, Courier, By Road, By Rail, etc.',
+      4: '🟩 **Step 3: Payment Terms**\n\nMode / Terms of Payment?\n\n*Examples:* Immediate, 30 Days Credit, Cash on Delivery, Bank Transfer, etc.',
+      5: '🟩 **Step 3: Other References**\n\nAny Other References?\n\n*(Optional - type "none" or "skip" to continue)*',
+      6: '🟩 **Step 3: Destination**\n\nDestination Address? (Where the goods are being sent)\n\n*Example:*\n```\nXYZ Manufacturing Unit\nPlot No. 45, Industrial Estate\nGurgaon - 122001, Haryana\n```',
+      7: '🟩 **Step 3: Delivery Terms**\n\nTerms of Delivery?\n\n*Examples:* FOB, CIF, Door Delivery, Ex-Works, etc.',
+      8: '🟩 **Step 4: Item Details**\n\nPlease enter the item details one by one:\n\n**Format:** [Item Name] – [Qty in Kgs or Nos] – [Rate] – [Due Date if any]\n\n**Examples:**\n• `HR Sheet 3mm – 5 MT – ₹58/kg – Due: 12-06-2025`\n• `TMT Bars 12mm – 10 MT – ₹52000/MT`\n• `MS Angle 50x50x6mm – 2000 kg – ₹55/kg`\n\n*After each item, I\'ll ask if you want to add more.*',
+      9: '🟩 **Step 5: GST and Final Checks**\n\nEnter GST rate (default is 18%) or type \'default\' to continue.\n\n*Examples:* 18, 12, 5, or "default"',
+      10: '✅ **Purchase Order Summary**\n\nHere\'s a summary of your Purchase Order:\n\n{summary}\n\nReady to generate the PDF?'
     };
     return prompts[step] || 'Please provide the required information.';
   };
@@ -954,133 +1014,220 @@ export default function ChatBot() {
         const supplierText = userInput.trim();
         const lines = supplierText.split('\n').map(line => line.trim()).filter(line => line);
         
-        currentData.supplier.name = lines[0] || supplierText;
-        if (lines.length > 1) {
-          currentData.supplier.address = lines.slice(1, -1).join('\n');
-          // Check if last line looks like GSTIN
-          const lastLine = lines[lines.length - 1];
-          if (lastLine.match(/\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}/)) {
-            currentData.supplier.gstin = lastLine;
-          } else {
-            currentData.supplier.address = lines.slice(1).join('\n');
+        currentData.purchaseOrder.supplier.name = lines[0] || supplierText;
+        
+        // Parse address, GSTIN, state and state code from multi-line input
+        const addressLines = [];
+        let gstin = '';
+        let state = '';
+        let stateCode = '';
+        
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          // Check if line looks like GSTIN
+          if (line.match(/\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}/)) {
+            gstin = line;
+            // Extract state code from GSTIN (first 2 digits)
+            stateCode = line.substring(0, 2);
+          }
+          // Check if line looks like state/state code format
+          else if (line.includes('/') && line.split('/').length === 2) {
+            const parts = line.split('/').map(p => p.trim());
+            state = parts[0];
+            stateCode = parts[1] || stateCode;
+          }
+          // Check if line is just a state name
+          else if (['Tamil Nadu', 'Delhi', 'Maharashtra', 'Karnataka', 'Gujarat', 'Haryana', 'Punjab', 'Uttar Pradesh', 'West Bengal', 'Rajasthan'].some(s => line.toLowerCase().includes(s.toLowerCase()))) {
+            state = line;
+          }
+          // Otherwise, it's part of address
+          else {
+            addressLines.push(line);
           }
         }
-        responseText = `✅ **Supplier Noted:**\n**Name:** ${currentData.supplier.name}\n**Address:** ${currentData.supplier.address}\n**GSTIN:** ${currentData.supplier.gstin || 'Not provided'}\n\n${getPOStepPrompt(nextStep)}`;
+        
+        currentData.purchaseOrder.supplier.address = addressLines.join('\n');
+        currentData.purchaseOrder.supplier.gstin = gstin;
+        currentData.purchaseOrder.supplier.state = state;
+        currentData.purchaseOrder.supplier.stateCode = stateCode;
+        
+        responseText = `✅ **Supplier Information Captured:**\n\n• **Name:** ${currentData.purchaseOrder.supplier.name}\n• **Address:** ${currentData.purchaseOrder.supplier.address || 'Not provided'}\n• **GSTIN:** ${currentData.purchaseOrder.supplier.gstin || 'Not provided'}\n• **State:** ${currentData.purchaseOrder.supplier.state || 'Not provided'}\n• **State Code:** ${currentData.purchaseOrder.supplier.stateCode || 'Not provided'}\n\n${getPOStepPrompt(nextStep)}`;
         break;
 
       case 1: // Voucher number
-        currentData.voucherNumber = userInput.trim();
-        responseText = `✅ **Voucher Number:** ${currentData.voucherNumber}\n\n${getPOStepPrompt(nextStep)}`;
+        currentData.purchaseOrder.voucherNumber = userInput.trim();
+        responseText = `✅ **Voucher Number:** ${currentData.purchaseOrder.voucherNumber}\n\n${getPOStepPrompt(nextStep)}`;
         break;
 
       case 2: // Reference number and date
-        currentData.referenceNumber = userInput.trim();
-        responseText = `✅ **Reference:** ${currentData.referenceNumber}\n\n${getPOStepPrompt(nextStep)}`;
+        const refInput = userInput.trim();
+        // Parse reference number and date if provided in format "REF123 / 08-06-2025"
+        if (refInput.includes('/')) {
+          const parts = refInput.split('/').map(p => p.trim());
+          currentData.purchaseOrder.referenceNumber = parts[0];
+          currentData.purchaseOrder.referenceDate = parts[1] || '';
+        } else {
+          currentData.purchaseOrder.referenceNumber = refInput;
+          currentData.purchaseOrder.referenceDate = new Date().toLocaleDateString('en-GB');
+        }
+        responseText = `✅ **Reference:** ${currentData.purchaseOrder.referenceNumber}${currentData.purchaseOrder.referenceDate ? ' / ' + currentData.purchaseOrder.referenceDate : ''}\n\n${getPOStepPrompt(nextStep)}`;
         break;
 
       case 3: // Dispatch
-        currentData.dispatch = userInput.trim();
-        responseText = `✅ **Dispatch:** ${currentData.dispatch}\n\n${getPOStepPrompt(nextStep)}`;
+        currentData.purchaseOrder.dispatchedThrough = userInput.trim();
+        responseText = `✅ **Dispatched Through:** ${currentData.purchaseOrder.dispatchedThrough}\n\n${getPOStepPrompt(nextStep)}`;
         break;
 
       case 4: // Payment terms
-        currentData.paymentTerms = userInput.trim();
-        responseText = `✅ **Payment Terms:** ${currentData.paymentTerms}\n\n${getPOStepPrompt(nextStep)}`;
+        currentData.purchaseOrder.modeOfPayment = userInput.trim();
+        responseText = `✅ **Mode of Payment:** ${currentData.purchaseOrder.modeOfPayment}\n\n${getPOStepPrompt(nextStep)}`;
         break;
 
       case 5: // Other references
         const otherRef = userInput.trim().toLowerCase();
         if (otherRef === 'none' || otherRef === 'skip' || otherRef === '') {
-          currentData.otherReferences = '';
+          currentData.purchaseOrder.otherReferences = '';
           responseText = `✅ **Other References:** Skipped\n\n${getPOStepPrompt(nextStep)}`;
         } else {
-          currentData.otherReferences = userInput.trim();
-          responseText = `✅ **Other References:** ${currentData.otherReferences}\n\n${getPOStepPrompt(nextStep)}`;
+          currentData.purchaseOrder.otherReferences = userInput.trim();
+          responseText = `✅ **Other References:** ${currentData.purchaseOrder.otherReferences}\n\n${getPOStepPrompt(nextStep)}`;
         }
         break;
 
       case 6: // Destination
-        currentData.destination = userInput.trim();
-        responseText = `✅ **Destination:** ${currentData.destination}\n\n${getPOStepPrompt(nextStep)}`;
+        currentData.purchaseOrder.destination = userInput.trim();
+        responseText = `✅ **Destination:** ${currentData.purchaseOrder.destination}\n\n${getPOStepPrompt(nextStep)}`;
         break;
 
       case 7: // Delivery terms
-        currentData.deliveryTerms = userInput.trim();
-        responseText = `✅ **Delivery Terms:** ${currentData.deliveryTerms}\n\n${getPOStepPrompt(nextStep)}`;
+        currentData.purchaseOrder.termsOfDelivery = userInput.trim();
+        responseText = `✅ **Terms of Delivery:** ${currentData.purchaseOrder.termsOfDelivery}\n\n${getPOStepPrompt(nextStep)}`;
         break;
 
       case 8: // Items
         const itemInput = userInput.trim().toLowerCase();
         
         if (itemInput === 'done' || itemInput === 'finish' || itemInput === 'complete') {
-          if (currentData.items.length === 0) {
+          if (currentData.purchaseOrder.items.length === 0) {
             responseText = '❌ **No items added yet!**\nPlease add at least one item before proceeding.\n\n' + getPOStepPrompt(step);
             nextStep = step; // Stay on current step
             break;
           }
-          responseText = `✅ **Items completed!** (${currentData.items.length} items added)\n\n${getPOStepPrompt(nextStep)}`;
+          responseText = `✅ **Items completed!** (${currentData.purchaseOrder.items.length} items added)\n\n${getPOStepPrompt(nextStep)}`;
         } else {
-          // Parse item input
-          const itemLines = userInput.split('\n').map(line => line.trim()).filter(line => line);
-          let description = '', qty = '', unit = '', rate = '';
+          // Enhanced parsing for format: "Item Name – Qty Unit – Rate – Due Date"
+          let description = '', quantity = '', rate = 0, dueDate = '';
           
-          // Simple parsing - try to extract from format like "TMT 12mm - 5 MT @ 58000"
-          const itemMatch = userInput.match(/^(.+?)\s*-?\s*(\d+(?:\.\d+)?)\s*(\w+)\s*@?\s*(\d+(?:\.\d+)?)/i);
+          // Try to parse enhanced format with due date
+          const enhancedMatch = userInput.match(/^(.+?)\s*[–-]\s*(\d+(?:\.\d+)?)\s*(\w+)\s*[–-]\s*₹?(\d+(?:\.\d+)?)(?:\/\w+)?\s*(?:[–-]\s*Due:\s*(.+))?/i);
           
-          if (itemMatch) {
-            description = itemMatch[1].trim();
-            qty = parseFloat(itemMatch[2]);
-            unit = itemMatch[3].toUpperCase();
-            rate = parseFloat(itemMatch[4]);
+          if (enhancedMatch) {
+            description = enhancedMatch[1].trim();
+            const qtyNum = parseFloat(enhancedMatch[2]);
+            const unit = enhancedMatch[3].toUpperCase();
+            quantity = `${qtyNum} ${unit}`;
+            rate = parseFloat(enhancedMatch[4]);
+            dueDate = enhancedMatch[5]?.trim() || '';
           } else {
-            // Fallback: ask for structured input
-            description = userInput;
-            qty = 1;
-            unit = 'PCS';
-            rate = 0;
+            // Try simpler format: "Item Name - Qty Unit @ Rate"
+            const simpleMatch = userInput.match(/^(.+?)\s*[–-]\s*(\d+(?:\.\d+)?)\s*(\w+)\s*[@–-]\s*₹?(\d+(?:\.\d+)?)/i);
+            
+            if (simpleMatch) {
+              description = simpleMatch[1].trim();
+              const qtyNum = parseFloat(simpleMatch[2]);
+              const unit = simpleMatch[3].toUpperCase();
+              quantity = `${qtyNum} ${unit}`;
+              rate = parseFloat(simpleMatch[4]);
+            } else {
+              // Fallback: treat as description only
+              description = userInput;
+              quantity = "1 Nos";
+              rate = 0;
+            }
           }
-          
-          const amount = qty * rate;
           
           const newItem = {
             description,
-            qty,
-            unit,
+            quantity,
             rate,
-            amount
+            dueDate: dueDate || undefined
           };
           
-          currentData.items.push(newItem);
+          // Remove dueDate if empty to match JSON structure
+          if (!newItem.dueDate) {
+            delete newItem.dueDate;
+          }
           
-          responseText = `✅ **Item ${currentData.items.length} added:**\n• **Description:** ${description}\n• **Quantity:** ${qty} ${unit}\n• **Rate:** ₹${rate.toLocaleString('en-IN')}\n• **Amount:** ₹${amount.toLocaleString('en-IN')}\n\n**Add another item** or type "**done**" to proceed.`;
+          currentData.purchaseOrder.items.push(newItem);
+          
+          let itemSummary = `✅ **Item ${currentData.purchaseOrder.items.length} Added Successfully:**\n\n• **Description:** ${description}\n• **Quantity:** ${quantity}\n• **Rate:** ₹${rate.toLocaleString('en-IN')}`;
+          
+          if (dueDate) {
+            itemSummary += `\n• **Due Date:** ${dueDate}`;
+          }
+          
+          responseText = `${itemSummary}\n\n**Add another item?** Type your next item or "**done**" to proceed to GST.`;
           nextStep = step; // Stay on current step for more items
         }
         break;
 
       case 9: // GST Rate
-        const gstInput = userInput.trim();
-        const gstMatch = gstInput.match(/(\d+(?:\.\d+)?)/);
-        if (gstMatch) {
-          currentData.gstRate = parseFloat(gstMatch[1]);
+        const gstInput = userInput.trim().toLowerCase();
+        if (gstInput === 'default') {
+          currentData.purchaseOrder.gstRate = 18;
         } else {
-          currentData.gstRate = 18; // Default
+          const gstMatch = gstInput.match(/(\d+(?:\.\d+)?)/);
+          if (gstMatch) {
+            currentData.purchaseOrder.gstRate = parseFloat(gstMatch[1]);
+          } else {
+            currentData.purchaseOrder.gstRate = 18; // Default
+          }
         }
-        responseText = `✅ **GST Rate:** ${currentData.gstRate}%\n\n${getPOStepPrompt(nextStep)}`;
+        
+        // Calculate financial totals and populate shipTo from business info
+        await calculatePOFinancials(currentData.purchaseOrder);
+        if (businessInfo) {
+          currentData.purchaseOrder.shipTo = {
+            name: businessInfo.businessName || 'Your Business Name',
+            address: businessInfo.address || 'Your Business Address'
+          };
+        }
+        
+        // Generate summary for confirmation
+        const poSummary = generatePOSummary(currentData);
+        const confirmationPrompt = getPOStepPrompt(nextStep).replace('{summary}', poSummary);
+        responseText = `✅ **GST Rate Set:** ${currentData.purchaseOrder.gstRate}%\n\n${confirmationPrompt}`;
+        
+        // Set up for showing PDF generation buttons
+        setTimeout(() => {
+          setMessages(prev => prev.map((msg, idx) => 
+            idx === prev.length - 1 
+              ? { ...msg, showPOButtons: true, poData: currentData }
+              : msg
+          ));
+        }, 100);
         break;
 
       case 10: // Confirmation
         const confirmInput = userInput.trim().toLowerCase();
-        if (confirmInput.includes('yes') || confirmInput.includes('generate') || confirmInput.includes('create')) {
-          responseText = '🔄 **Generating Purchase Order PDF...**';
+        if (confirmInput.includes('yes') || confirmInput.includes('generate') || confirmInput.includes('create') || confirmInput.includes('pdf')) {
+          // Set up for PDF generation with special message
+          responseText = '🔄 **Generating Purchase Order PDF...**\n\nPlease wait while I create your professional Purchase Order document.';
           nextStep = step; // Don't increment, we'll handle PDF generation
           
-          // Generate PDF
+          // Update state to show pending generation
+          setPurchaseOrderFlow(prev => ({
+            ...prev,
+            pendingGeneration: true
+          }));
+          
+          // Generate PDF after a short delay
           setTimeout(async () => {
             try {
               await generatePurchaseOrderPDF(currentData);
               setMessages(prev => [...prev, {
                 type: 'bot',
-                text: '✅ **Purchase Order PDF Generated Successfully!**\n\nYour purchase order has been created and downloaded.\n\nWhat would you like to do next?'
+                text: '✅ **Purchase Order PDF Generated Successfully!**\n\n📁 Your purchase order has been created and downloaded to your device.\n\n🎯 **What\'s Next?**\n• Create another Purchase Order\n• Generate a Quotation\n• Ask me about steel products'
               }]);
               
               // Reset PO flow
@@ -1088,7 +1235,7 @@ export default function ChatBot() {
                 active: false,
                 step: 0,
                 data: {
-                  supplier: { name: '', address: '', gstin: '' },
+                  supplier: { name: '', address: '', gstin: '', state: '' },
                   voucherNumber: '',
                   referenceNumber: '',
                   referenceDate: '',
@@ -1098,7 +1245,7 @@ export default function ChatBot() {
                   destination: '',
                   deliveryTerms: '',
                   items: [],
-                  currentItem: { description: '', qty: '', unit: '', rate: '', amount: '' },
+                  currentItem: { description: '', qty: '', unit: '', rate: '', amount: '', dueDate: '' },
                   gstRate: 18
                 },
                 pendingGeneration: false
@@ -1107,12 +1254,18 @@ export default function ChatBot() {
               console.error('Error generating PO PDF:', error);
               setMessages(prev => [...prev, {
                 type: 'bot',
-                text: '❌ **Error generating Purchase Order PDF**\n\nPlease try again or contact support if the issue persists.'
+                text: '❌ **Error generating Purchase Order PDF**\n\nThere was an issue creating the PDF. Please check:\n• Your browser allows downloads\n• You have sufficient storage space\n\nTry again or contact support if the issue persists.'
               }]);
+              
+              // Reset pending generation on error
+              setPurchaseOrderFlow(prev => ({
+                ...prev,
+                pendingGeneration: false
+              }));
             }
-          }, 1000);
+          }, 1500);
         } else {
-          responseText = '📝 **Edit Mode**\nWhat would you like to modify?\n• Supplier details\n• Items\n• Payment terms\n• Or type "generate" to proceed with PDF creation';
+          responseText = '📝 **Edit Mode Available**\n\nYou can modify any details before generating the PDF:\n\n• Type "edit supplier" to change supplier details\n• Type "edit items" to modify items\n• Type "add item: [description]" to add more items\n• Type "change gst to [rate]" to update GST\n\nOr type "**generate**" to proceed with PDF creation.';
           nextStep = step; // Stay on confirmation
         }
         break;
@@ -1827,8 +1980,8 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       const documentNumber = `QUO_${Date.now()}`;
       const date = new Date().toLocaleDateString('en-IN');
       
-      const totalQty = quotationData.products.reduce((sum, item) => sum + item.qty, 0);
-      const taxableAmount = quotationData.products.reduce((sum, item) => sum + item.amount, 0);
+      const totalQty = (quotationData.products || quotationData.items || []).reduce((sum, item) => sum + (item.qty || 0), 0);
+      const taxableAmount = (quotationData.products || quotationData.items || []).reduce((sum, item) => sum + (item.amount || 0), 0);
       
       // Ensure GST is valid before doing calculations
       const validGst = typeof quotationData.gst === 'number' && !isNaN(quotationData.gst) && quotationData.gst >= 0 ? quotationData.gst : 18;
@@ -2049,6 +2202,118 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
     }).format(amount);
   };
 
+  // Calculate Purchase Order Financial Totals
+  const calculatePOFinancials = async (purchaseOrder) => {
+    // Calculate subtotal from items
+    let subtotal = 0;
+    purchaseOrder.items.forEach(item => {
+      // Parse quantity to get numeric value
+      const qtyMatch = item.quantity.match(/(\d+(?:\.\d+)?)/);
+      const qty = qtyMatch ? parseFloat(qtyMatch[1]) : 1;
+      subtotal += qty * item.rate;
+    });
+    
+    // Calculate GST and total
+    const gstAmount = subtotal * (purchaseOrder.gstRate / 100);
+    const totalAmount = subtotal + gstAmount;
+    
+    // Convert amount to words (Indian format)
+    const amountInWords = numberToWordsIndian(Math.floor(totalAmount));
+    
+    // Update purchase order with calculations
+    purchaseOrder.gstAmount = parseFloat(gstAmount.toFixed(2));
+    purchaseOrder.totalAmount = parseFloat(totalAmount.toFixed(2));
+    purchaseOrder.amountInWords = amountInWords;
+  };
+
+  // Indian Number to Words Converter
+  const numberToWordsIndian = (num) => {
+    const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+    const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+    const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+    
+    if (num === 0) return 'Zero Rupees Only';
+    
+    const convertHundreds = (n) => {
+      let result = '';
+      if (n > 99) {
+        result += ones[Math.floor(n / 100)] + ' Hundred ';
+        n %= 100;
+      }
+      if (n > 19) {
+        result += tens[Math.floor(n / 10)] + ' ';
+        n %= 10;
+      } else if (n > 9) {
+        result += teens[n - 10] + ' ';
+        n = 0;
+      }
+      if (n > 0) {
+        result += ones[n] + ' ';
+      }
+      return result.trim();
+    };
+
+    let result = '';
+    
+    // Handle crores
+    if (num >= 10000000) {
+      const crores = Math.floor(num / 10000000);
+      result += convertHundreds(crores) + ' Crore ';
+      num %= 10000000;
+    }
+    
+    // Handle lakhs
+    if (num >= 100000) {
+      const lakhs = Math.floor(num / 100000);
+      result += convertHundreds(lakhs) + ' Lakh ';
+      num %= 100000;
+    }
+    
+    // Handle thousands
+    if (num >= 1000) {
+      const thousands = Math.floor(num / 1000);
+      result += convertHundreds(thousands) + ' Thousand ';
+      num %= 1000;
+    }
+    
+    // Handle remaining hundreds
+    if (num > 0) {
+      result += convertHundreds(num) + ' ';
+    }
+    
+    return result.trim() + ' Rupees Only';
+  };
+
+  // Generate Purchase Order Summary
+  const generatePOSummary = (poData) => {
+    const po = poData.purchaseOrder || poData;
+    
+    let summary = `📋 **Purchase Order Details:**\n\n`;
+    summary += `• **Supplier:** ${po.supplier.name}\n`;
+    summary += `• **Voucher No:** ${po.voucherNumber}\n`;
+    summary += `• **Reference:** ${po.referenceNumber}${po.referenceDate ? ' / ' + po.referenceDate : ''}\n`;
+    summary += `• **Dispatched Through:** ${po.dispatchedThrough}\n`;
+    summary += `• **Mode of Payment:** ${po.modeOfPayment}\n`;
+    summary += `• **Destination:** ${po.destination}\n\n`;
+    
+    summary += `📦 **Items (${po.items.length}):**\n`;
+    po.items.forEach((item, index) => {
+      summary += `${index + 1}. ${item.description} - ${item.quantity} @ ₹${item.rate.toLocaleString('en-IN')}`;
+      if (item.dueDate) {
+        summary += ` (Due: ${item.dueDate})`;
+      }
+      summary += '\n';
+    });
+    
+    summary += `\n💰 **Financial Summary:**\n`;
+    summary += `• **GST Rate:** ${po.gstRate}%\n`;
+    summary += `• **GST Amount:** ₹${po.gstAmount?.toLocaleString('en-IN') || '0'}\n`;
+    summary += `• **Total Amount:** ₹${po.totalAmount?.toLocaleString('en-IN') || '0'}\n`;
+    summary += `• **Amount in Words:** ${po.amountInWords || 'Not calculated'}\n`;
+    
+    return summary;
+  };
+
   // Purchase Order PDF Generation
   const generatePurchaseOrderPDF = async (poData) => {
     try {
@@ -2056,7 +2321,32 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
         throw new Error('Business information not available');
       }
 
-      const { jsPDF } = window.jspdf;
+      // Extract purchaseOrder from data structure
+      const po = poData.purchaseOrder || poData;
+      
+      // Ensure we have all required properties with fallbacks
+      const poDetails = {
+        voucherNumber: po.voucherNumber || poData.voucherNumber || 'PO001',
+        referenceNumber: po.referenceNumber || poData.referenceNumber || '',
+        referenceDate: po.referenceDate || poData.referenceDate || '',
+        dispatchedThrough: po.dispatchedThrough || poData.dispatchedThrough || poData.dispatch || '',
+        modeOfPayment: po.modeOfPayment || poData.modeOfPayment || poData.paymentTerms || '',
+        destination: po.destination || poData.destination || '',
+        termsOfDelivery: po.termsOfDelivery || poData.termsOfDelivery || poData.deliveryTerms || '',
+        supplier: {
+          name: po.supplier?.name || poData.supplier?.name || 'Supplier Name',
+          address: po.supplier?.address || poData.supplier?.address || '',
+          gstin: po.supplier?.gstin || poData.supplier?.gstin || '',
+          state: po.supplier?.state || poData.supplier?.state || '',
+          stateCode: po.supplier?.stateCode || poData.supplier?.stateCode || ''
+        },
+        items: po.items || poData.items || [],
+        gstRate: po.gstRate || poData.gstRate || 18,
+        gstAmount: po.gstAmount || poData.gstAmount || 0,
+        totalAmount: po.totalAmount || poData.totalAmount || 0,
+        amountInWords: po.amountInWords || poData.amountInWords || ''
+      };
+
       const pdfDoc = new jsPDF();
 
       // Helper function to convert number to words
@@ -2111,10 +2401,10 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       };
 
       // Calculate totals
-      const subtotal = poData.items.reduce((sum, item) => sum + (item.amount || 0), 0);
-      const gstAmount = subtotal * (poData.gstRate / 100);
+      const subtotal = poDetails.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+      const gstAmount = subtotal * (poDetails.gstRate / 100);
       const total = subtotal + gstAmount;
-      const totalQty = poData.items.reduce((sum, item) => sum + (item.qty || 0), 0);
+      const totalQty = poDetails.items.reduce((sum, item) => sum + (item.qty || 0), 0);
 
       // Set up the document
       pdfDoc.setFont('helvetica');
@@ -2155,7 +2445,7 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       pdfDoc.setFont('helvetica', 'bold');
       pdfDoc.text('PO No:', 140, y);
       pdfDoc.setFont('helvetica', 'normal');
-      pdfDoc.text(poData.voucherNumber || 'PO001', 165, y);
+      pdfDoc.text(poDetails.voucherNumber, 165, y);
       
       y += 7;
       pdfDoc.setFont('helvetica', 'bold');
@@ -2163,12 +2453,12 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       pdfDoc.setFont('helvetica', 'normal');
       pdfDoc.text(new Date().toLocaleDateString('en-GB'), 165, y);
       
-      if (poData.referenceNumber) {
+      if (poDetails.referenceNumber) {
         y += 7;
         pdfDoc.setFont('helvetica', 'bold');
         pdfDoc.text('Ref:', 140, y);
         pdfDoc.setFont('helvetica', 'normal');
-        pdfDoc.text(poData.referenceNumber, 165, y);
+        pdfDoc.text(poDetails.referenceNumber, 165, y);
       }
 
       // Three-column layout
@@ -2179,15 +2469,15 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       pdfDoc.text('BILL FROM:', 14, y);
       y += 7;
       pdfDoc.setFont('helvetica', 'normal');
-      pdfDoc.text(poData.supplier.name || 'Supplier Name', 14, y);
+      pdfDoc.text(poDetails.supplier.name, 14, y);
       y += 5;
-      if (poData.supplier.address) {
-        const supplierLines = pdfDoc.splitTextToSize(poData.supplier.address, 60);
+      if (poDetails.supplier.address) {
+        const supplierLines = pdfDoc.splitTextToSize(poDetails.supplier.address, 60);
         pdfDoc.text(supplierLines, 14, y);
         y = Math.max(y + supplierLines.length * 5, y + 15);
       }
-      if (poData.supplier.gstin) {
-        pdfDoc.text(`GSTIN: ${poData.supplier.gstin}`, 14, y);
+      if (poDetails.supplier.gstin) {
+        pdfDoc.text(`GSTIN: ${poDetails.supplier.gstin}`, 14, y);
       }
 
       // Ship To (same as our address)
@@ -2205,19 +2495,19 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
 
       // Other details (right column)
       let detailY = 80;
-      if (poData.dispatch) {
+      if (poDetails.dispatchedThrough) {
         pdfDoc.setFont('helvetica', 'bold');
         pdfDoc.text('Dispatch:', 140, detailY);
         pdfDoc.setFont('helvetica', 'normal');
-        pdfDoc.text(poData.dispatch, 140, detailY + 7);
+        pdfDoc.text(poDetails.dispatchedThrough, 140, detailY + 7);
         detailY += 14;
       }
       
-      if (poData.destination) {
+      if (poDetails.destination) {
         pdfDoc.setFont('helvetica', 'bold');
         pdfDoc.text('Destination:', 140, detailY);
         pdfDoc.setFont('helvetica', 'normal');
-        const destLines = pdfDoc.splitTextToSize(poData.destination, 50);
+        const destLines = pdfDoc.splitTextToSize(poDetails.destination, 50);
         pdfDoc.text(destLines, 140, detailY + 7);
         detailY += 7 + destLines.length * 5;
       }
@@ -2245,13 +2535,13 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       pdfDoc.setFont('helvetica', 'normal');
       
       // Items
-      poData.items.forEach((item, index) => {
+      poDetails.items.forEach((item, index) => {
         pdfDoc.text((index + 1).toString(), 16, y);
         
         const description = pdfDoc.splitTextToSize(item.description || '', 85);
         pdfDoc.text(description, 30, y);
         
-        pdfDoc.text(item.qty?.toString() || '0', 120, y);
+        pdfDoc.text(item.quantity?.toString() || item.qty?.toString() || '0', 120, y);
         pdfDoc.text(item.unit || 'PCS', 135, y);
         pdfDoc.text('₹' + (item.rate || 0).toLocaleString('en-IN'), 150, y);
         pdfDoc.text('₹' + (item.amount || 0).toLocaleString('en-IN'), 175, y);
@@ -2277,7 +2567,7 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       y += 8;
       
       // GST
-      pdfDoc.text(`GST (${poData.gstRate}%):`, 120, y);
+      pdfDoc.text(`GST (${poDetails.gstRate}%):`, 120, y);
       pdfDoc.text('₹' + gstAmount.toLocaleString('en-IN'), 175, y);
       y += 8;
       
@@ -2326,7 +2616,7 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       pdfDoc.line(140, y + 20, 190, y + 20);
 
       // Save the PDF
-      const fileName = `Purchase_Order_${poData.voucherNumber || new Date().getTime()}.pdf`;
+      const fileName = `Purchase_Order_${poDetails.voucherNumber}.pdf`;
       pdfDoc.save(fileName);
       
       console.log('✅ Purchase Order PDF generated successfully');
@@ -2576,12 +2866,26 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       console.log("🔧 Trying regex parser...");
       const regexData = parseQuotationPrompt(userMessage);
       
-      // Check if regex found meaningful data
-      if (regexData.customerName && regexData.items.length > 0) {
+      // Check if regex found meaningful data - support both 'items' and 'products'
+      const products = regexData.products || regexData.items || [];
+      if (regexData.customerName && products.length > 0) {
         console.log("✅ Regex parser successful!");
-        return regexData;
+        // Normalize to use 'products' for consistency
+        return {
+          ...regexData,
+          products: products,
+          items: undefined // Remove legacy field
+        };
       } else {
         console.log("⚠️ Regex parser incomplete, trying OpenAI...");
+        // Add helpful feedback for simple prompts
+        if (products.length === 0) {
+          return {
+            success: false,
+            error: "I couldn't extract product info from your request. Could you rephrase like: 'ISMC 100×50 – 5 MT at ₹56/kg'?",
+            requiresClarification: true
+          };
+        }
       }
     } catch (error) {
       console.error("❌ Regex parser failed:", error);
@@ -2592,16 +2896,31 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       console.log("🤖 Trying OpenAI parser...");
       const aiResponse = await sendToOpenAI(userMessage);
       
-      if (typeof aiResponse === 'object' && aiResponse.customerName && aiResponse.items) {
+      // Support both 'items' and 'products' from AI response
+      const products = aiResponse.products || aiResponse.items || [];
+      if (typeof aiResponse === 'object' && aiResponse.customerName && products.length > 0) {
         console.log("✅ OpenAI parser successful!");
-        return aiResponse;
+        // Normalize to use 'products' for consistency
+        return {
+          ...aiResponse,
+          products: products,
+          items: undefined // Remove legacy field
+        };
       } else {
         console.log("⚠️ OpenAI returned text response, not structured data");
-        return null;
+        return {
+          success: false,
+          error: "I couldn't extract product info from your request. Could you rephrase like: 'ISMC 100×50 – 5 MT at ₹56/kg'?",
+          requiresClarification: true
+        };
       }
     } catch (error) {
       console.error("❌ OpenAI parser failed:", error);
-      return null;
+      return {
+        success: false,
+        error: "I couldn't extract product info from your request. Could you rephrase like: 'ISMC 100×50 – 5 MT at ₹56/kg'?",
+        requiresClarification: true
+      };
     }
   };
 
@@ -2705,15 +3024,15 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       
       // Try new prompt parser first for quotation intents
       if (routing.action === 'start_quotation' || routing.intent === 'quotation_intent') {
-        console.log('🔍 Trying new prompt parser for quotation...');
-        const parseResult = await promptParser.parsePromptToQuote(prompt);
+        console.log('🔍 Trying enhanced prompt parser for quotation...');
+        const parseResult = await parsePromptToQuoteEnhanced(prompt);
         
         // ✅ Handle clarification requests
-        if (parseResult.needsClarification) {
-          console.log('❓ Parser requesting clarification:', parseResult.missingFields);
+        if (parseResult.requiresClarification) {
+          console.log('❓ Parser requesting clarification:', parseResult.error);
           setMessages(prev => [...prev, { 
             type: 'bot', 
-            text: parseResult.clarificationMessage,
+            text: parseResult.error,
             showPDFButtons: false
           }]);
           setPrompt('');
@@ -2771,6 +3090,91 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
           type: 'bot', 
           text: poResponse
         }]);
+        
+        setPrompt('');
+        setIsLoading(false);
+        return;
+      }
+
+      // 🚚 LONG-FORM PO CONFIRMATION HANDLER
+      if (purchaseOrderFlow.pendingConfirmation) {
+        console.log('🚚 Long-form PO confirmation pending, handling user response:', prompt);
+        
+        const response = prompt.toLowerCase().trim();
+        
+        if (response.includes('confirm') || response.includes('generate') || response.includes('yes') || response.includes('ok') || response.includes('proceed')) {
+          console.log('✅ User confirmed PO generation');
+          
+          try {
+            // Transform parsed data to match PO PDF format
+            const transformedData = transformLongFormPOData(purchaseOrderFlow.data);
+            console.log('🔄 Transformed PO data:', transformedData);
+            
+            // Generate PDF with transformed data
+            await generatePurchaseOrderPDF(transformedData);
+            
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: '✅ **Purchase Order PDF Generated Successfully!**\n\nYour purchase order has been created and is ready for download. The PDF includes all the details you specified in your request.',
+              showPDFButtons: false
+            }]);
+            
+            // Reset PO flow
+            setPurchaseOrderFlow(prev => ({
+              ...prev,
+              pendingConfirmation: false,
+              data: {
+                supplier: { name: '', address: '', gstin: '' },
+                voucherNumber: '',
+                referenceNumber: '',
+                referenceDate: '',
+                dispatch: '',
+                paymentTerms: '',
+                otherReferences: '',
+                destination: '',
+                deliveryTerms: '',
+                items: [],
+                currentItem: { description: '', qty: '', unit: '', rate: '', amount: '' },
+                gstRate: 18
+              },
+              originalPrompt: ''
+            }));
+            
+          } catch (error) {
+            console.error('Error generating PO PDF:', error);
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: '❌ Sorry, there was an error generating the PDF. Please try again or use the standard PO creation flow.',
+              showPDFButtons: false
+            }]);
+          }
+          
+        } else if (response.includes('edit') || response.includes('change') || response.includes('modify')) {
+          console.log('✏️ User wants to edit PO details');
+          
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: '✏️ **Edit Mode**\n\nI\'ll guide you through the standard purchase order creation process where you can modify each detail step by step.',
+            showPDFButtons: false
+          }]);
+          
+          // Reset and start standard PO flow
+          setPurchaseOrderFlow(prev => ({
+            ...prev,
+            pendingConfirmation: false,
+            originalPrompt: ''
+          }));
+          
+          startPurchaseOrderFlow();
+          
+        } else {
+          // Ask for clarification
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: '❓ **Please confirm your choice:**\n\n✅ **"Confirm & Generate"** - Create the PDF as shown\n✏️ **"Edit Details"** - Modify the information step by step\n\nWhat would you like to do?',
+            showPDFButtons: false
+          }]);
+        }
         
         setPrompt('');
         setIsLoading(false);
@@ -2840,6 +3244,81 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
       // 📋 HANDLE CHECKLIST QUOTATION MODE
       if (isChecklistMode && checklistData?.checklist) {
         console.log('📋 Checklist mode active, processing input:', prompt);
+        
+        // 🎯 PRIORITY CHECK: Try direct parsing first - if successful, exit checklist mode
+        console.log('🔍 Attempting direct parse during checklist mode...');
+        try {
+          const parseResult = await parsePromptToQuoteEnhanced(prompt);
+          console.log('📊 Direct parse result during checklist:', {
+            success: parseResult.success,
+            confidence: parseResult.confidence,
+            customerName: parseResult.customerName,
+            productsCount: parseResult.products?.length || 0
+          });
+          
+          if (parseResult.success && parseResult.confidence > 70 && 
+              parseResult.customerName !== "Not specified" && parseResult.products.length > 0) {
+            console.log('✅ Direct parse successful during checklist mode, switching to direct generation');
+            
+            // Exit checklist mode
+            setIsChecklistMode(false);
+            setChecklistData(null);
+            setAwaitingMoreItems(false);
+            
+            // Generate quotation directly
+            const quotationData = {
+              customerName: parseResult.customerName,
+              products: parseResult.products,
+              gst: parseResult.gst,
+              transport: parseResult.transport,
+              loadingCharges: parseResult.loadingCharges,
+              paymentTerms: parseResult.paymentTerms,
+              priceValidity: parseResult.priceValidity
+            };
+            
+            const summary = generateQuotationSummary(quotationData);
+            
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: `🎯 **Smart Quotation Generated!**\n\n${summary}\n\n✅ Ready to generate PDF?`,
+              showPDFButtons: true
+            }]);
+            
+            setQuotationFlow(prev => ({
+              ...prev,
+              data: quotationData,
+              pendingGeneration: true,
+              originalPrompt: prompt
+            }));
+            
+            setPrompt('');
+            setIsLoading(false);
+            return;
+          } else {
+            console.log('❌ Direct parse conditions not met, continuing with checklist mode');
+          }
+        } catch (error) {
+          console.log('❌ Direct parsing failed during checklist mode:', error.message);
+        }
+        
+        // Check for reset commands to exit checklist mode
+        const resetCommands = ['reset', 'start over', 'new quotation', 'clear', 'exit checklist'];
+        if (resetCommands.some(cmd => prompt.toLowerCase().includes(cmd))) {
+          console.log('🔄 Reset command detected, exiting checklist mode');
+          setIsChecklistMode(false);
+          setChecklistData(null);
+          setAwaitingMoreItems(false);
+          
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: '🔄 **Checklist Reset!**\n\nI\'m ready to help you create a new quotation. You can:\n\n• Provide a complete quotation request\n• Ask me to create a quotation step by step\n• Ask any steel-related questions\n\nWhat would you like to do?',
+            showPDFButtons: false
+          }]);
+          
+          setPrompt('');
+          setIsLoading(false);
+          return;
+        }
         
         // Check for checklist commands first
         if (isChecklistCommand(prompt)) {
@@ -3009,6 +3488,52 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
         return;
       }
 
+      // 🚚 LONG-FORM PURCHASE ORDER DETECTION - Process before general intent routing
+      if (isLongFormPOPrompt(prompt)) {
+        console.log('🚚 Detected long-form PO prompt, parsing...');
+        
+        try {
+          // Parse the long-form prompt
+          const parsedData = parsePurchaseOrderPrompt(prompt);
+          
+          // Generate confirmation summary
+          const confirmationSummary = generatePOConfirmation(parsedData);
+          
+          // Store parsed data for PDF generation
+          setPurchaseOrderFlow(prev => ({
+            ...prev,
+            data: parsedData,
+            pendingConfirmation: true,
+            originalPrompt: prompt
+          }));
+          
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: confirmationSummary,
+            showPDFButtons: false,
+            longFormPO: true
+          }]);
+          
+          setPrompt('');
+          setIsLoading(false);
+          return;
+          
+        } catch (error) {
+          console.error('Error parsing long-form PO:', error);
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: 'I detected a purchase order request but had trouble parsing it. Let me guide you through the standard PO creation process.',
+            showPDFButtons: false
+          }]);
+          
+          // Fallback to standard PO flow
+          startPurchaseOrderFlow();
+          setPrompt('');
+          setIsLoading(false);
+          return;
+        }
+      }
+
       // 🎯 NEW INTENT ROUTING SYSTEM - Only when NOT in specific quotation context
       console.log('🎯 Using new intent routing system for message:', prompt);
       
@@ -3064,6 +3589,13 @@ Ready to generate the quotation PDF with the above details? (yes/no)`
             setChecklistData(intentResult.checklistData);
             setIsChecklistMode(true);
             setAwaitingMoreItems(false);
+            
+            // Show the initial checklist response
+            setMessages(prev => [...prev, { 
+              type: 'bot', 
+              text: intentResult.response,
+              showPDFButtons: intentResult.showPDFButtons || false
+            }]);
           }
           break;
           
@@ -3163,9 +3695,164 @@ What specific information are you looking for?`,
     }
   };
 
+  // 🔍 DETECT UNSTRUCTURED QUOTATION (UOM METER MODE)
+  const detectUnstructuredQuotation = (prompt) => {
+    const meterModeKeywords = [
+      "uom to be in mtrs",
+      "uom to be in meters", 
+      "uom in mtrs",
+      "uom in meters",
+      "rate per meter",
+      "quote in meters"
+    ];
+    
+    // More flexible pattern detection
+    const hasStructuredFormat = prompt.toLowerCase().includes("6 mtr") || 
+                               prompt.toLowerCase().includes("mtr length") ||
+                               prompt.toLowerCase().includes("mtr,") ||
+                               /\d+\s*mtr\s*(length)?/i.test(prompt);
+    
+    // Check for product patterns that indicate structured quotation
+    const hasProductPatterns = /ms\s+(channel|flat|angle|pipe|beam|sheet)\s+\d+/i.test(prompt) &&
+                              /\d+\s+nos/i.test(prompt);
+    
+    const hasMeterKeywords = meterModeKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword)
+    );
+    
+    // More aggressive detection - if it has customer info + products + MTR format
+    const hasCustomerAndProducts = prompt.toLowerCase().includes("create quote to") && 
+                                  hasProductPatterns;
+    
+    return hasMeterKeywords || hasStructuredFormat || hasCustomerAndProducts;
+  };
+
   // 📋 QUOTATION REQUEST HANDLER  
   const handleQuotationRequest = async (userPrompt) => {
     console.log('🔧 Processing quotation request:', userPrompt);
+    console.log('🆕 ENHANCED PARSER VERSION 2.0 - LOADED!');
+
+    // 🎯 DECISIVE PARSING: Try enhanced parser with structured routing
+    console.log('🚀 Using decisive enhanced parser...');
+    
+    try {
+      const parseResult = await parsePromptToQuoteEnhanced(userPrompt);
+      console.log('📊 Parse result:', {
+        success: parseResult.success,
+        productsCount: parseResult.products?.length || 0,
+        confidence: parseResult.confidence,
+        source: parseResult.source
+      });
+      
+      // 🎯 DECISIVE LOGIC: If parsing succeeded and found products, validate smartly!
+      if (parseResult.success && parseResult.products.length > 0) {
+        console.log('🎉 PARSING SUCCESS - validating product structure...');
+        
+        // 🔧 SMART VALIDATION: Check if products meet UOM-specific requirements
+        const hasValidStructure = validateEnhancedParserResult(parseResult);
+        console.log('📋 Product structure validation:', hasValidStructure);
+        
+        // Convert to expected format for PDF generation
+        const quotationData = {
+          customerName: parseResult.customerName,
+          customer: parseResult.customerName, // Backward compatibility
+          items: parseResult.products.map(product => ({
+            description: product.description,
+            length: product.length || 6,
+            nos: product.quantity,
+            totalMtrs: (product.length || 6) * product.quantity,
+            amount: product.rate ? product.rate * product.quantity : 0,
+            ratePerMtr: product.rate,
+            uom: product.uom || 'Metres'
+          })),
+          uomPreference: parseResult.uomPreference,
+          gst: parseResult.gst || 18,
+          subTotal: parseResult.products.reduce((sum, p) => sum + (p.rate ? p.rate * p.quantity : 0), 0),
+          timestamp: parseResult.timestamp,
+          confidence: parseResult.confidence,
+          source: parseResult.source
+        };
+        
+        // Calculate totals
+        quotationData.gstAmount = quotationData.subTotal * (quotationData.gst / 100);
+        quotationData.total = quotationData.subTotal + quotationData.gstAmount;
+        
+        // 🔧 FLEXIBLE PDF CHECK: Can we proceed even if some details are missing?
+        const pdfCheck = canProceedToPDF(quotationData);
+        console.log('📄 PDF generation check:', pdfCheck);
+        
+        if (pdfCheck.canProceed || (hasValidStructure && parseResult.confidence >= 0.8)) {
+          console.log('✅ PROCEEDING TO PDF CONFIRMATION - sufficient data available!');
+          
+          const displayText = formatQuotationDisplay(quotationData);
+          
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            text: `${displayText}\n\n🔘 Ready to generate PDF?`,
+            showPDFButtons: true,
+            quotationData: quotationData
+          }]);
+          
+          // Set quotation flow to PDF confirmation step
+          setQuotationFlow(prev => ({
+            ...prev,
+            data: quotationData,
+            pendingGeneration: true,
+            originalPrompt: userPrompt,
+            step: 'confirm_quote' // Direct to confirmation
+          }));
+          
+          return; // Exit early - we've successfully handled this request
+        } else {
+          console.log('⚠️ Products found but need additional details for PDF generation');
+          // Continue to fallback methods for additional data collection
+        }
+      } 
+      
+      // If parsing failed or requires clarification
+      if (parseResult.requiresClarification) {
+        console.log('⚠️ Parser requires clarification - trying fallback methods');
+      } else {
+        console.log('⚠️ Parser succeeded but found no products - trying fallback');
+      }
+      
+    } catch (error) {
+      console.error('❌ Enhanced parser failed:', error.message);
+    }
+
+    // 🔧 STEP 2: Try original enhanced parser as backup
+    console.log('🔄 Trying original enhanced parser...');
+    
+    try {
+      const parsedQuotation = parseUnstructuredQuotation(userPrompt);
+      console.log('✅ Original enhanced parsing result:', parsedQuotation);
+      
+      if (parsedQuotation.customer && parsedQuotation.items.length > 0) {
+        console.log('🎉 Original enhanced parser SUCCESS - using result!');
+        // Format for display using the robust formatter
+        const displayText = formatQuotationDisplay(parsedQuotation);
+        
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: `${displayText}\n\n🔘 Ready to generate PDF?`,
+          showPDFButtons: true,
+          quotationData: parsedQuotation
+        }]);
+        
+        setQuotationFlow(prev => ({
+          ...prev,
+          data: parsedQuotation,
+          pendingGeneration: true,
+          originalPrompt: userPrompt
+        }));
+        
+        return; // Exit early, we've handled this request
+      } else {
+        console.log('⚠️ Original enhanced parser succeeded but no valid data found - falling back');
+      }
+    } catch (error) {
+      console.error('❌ Original enhanced parser failed, falling back to legacy methods:', error.message);
+    }
 
     // Check if this is a steel estimation request
     if (detectSteelEstimationRequest(userPrompt)) {
@@ -3656,6 +4343,101 @@ ${quotationData.products.map(p => `• ${p.description}: ${p.qty}kg @ ₹${p.rat
                       className="px-4 py-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded hover:bg-gray-50 transition-colors flex items-center gap-2"
                     >
                       ✏️ No, Edit
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 🛒 PURCHASE ORDER BUTTONS - Only show when showPOButtons is true */}
+              {message.type === 'bot' && message.showPOButtons && (
+                <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-purple-600">🛒</span>
+                    <span className="font-medium text-purple-800">Ready to Generate Purchase Order PDF</span>
+                  </div>
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={async () => {
+                        try {
+                          const poData = message.poData || purchaseOrderFlow.data;
+                          
+                          // Show generating message
+                          setMessages(prev => [...prev, { 
+                            type: 'bot', 
+                            text: '🔄 **Generating Purchase Order PDF...**\n\nPlease wait while I create your professional Purchase Order document.'
+                          }]);
+                          
+                          // Generate PDF after short delay
+                          setTimeout(async () => {
+                            try {
+                              await generatePurchaseOrderPDF(poData);
+                              setMessages(prev => [...prev, {
+                                type: 'bot',
+                                text: '✅ **Purchase Order PDF Generated Successfully!**\n\n📁 Your purchase order has been created and downloaded to your device.\n\n🎯 **What\'s Next?**\n• Create another Purchase Order\n• Generate a Quotation\n• Ask me about steel products'
+                              }]);
+                              
+                              // Reset PO flow
+                              setPurchaseOrderFlow({
+                                active: false,
+                                step: 0,
+                                data: {
+                                  purchaseOrder: {
+                                    voucherNumber: '',
+                                    referenceNumber: '',
+                                    referenceDate: '',
+                                    dispatchedThrough: '',
+                                    modeOfPayment: '',
+                                    otherReferences: '',
+                                    destination: '',
+                                    termsOfDelivery: '',
+                                    supplier: {
+                                      name: '',
+                                      address: '',
+                                      gstin: '',
+                                      state: '',
+                                      stateCode: ''
+                                    },
+                                    shipTo: {
+                                      name: '',
+                                      address: ''
+                                    },
+                                    items: [],
+                                    gstRate: 18,
+                                    gstAmount: 0,
+                                    totalAmount: 0,
+                                    amountInWords: '',
+                                    termsNote: 'This is a computer-generated purchase order and does not require a signature.'
+                                  }
+                                },
+                                pendingGeneration: false
+                              });
+                            } catch (error) {
+                              console.error('Error generating PO PDF:', error);
+                              setMessages(prev => [...prev, {
+                                type: 'bot',
+                                text: '❌ **Error generating Purchase Order PDF**\n\nThere was an issue creating the PDF. Please check:\n• Your browser allows downloads\n• You have sufficient storage space\n\nTry again or contact support if the issue persists.'
+                              }]);
+                            }
+                          }, 1000);
+                        } catch (error) {
+                          console.error('Error in PO generation:', error);
+                        }
+                      }} 
+                      className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 transition-colors flex items-center gap-2"
+                    >
+                      ✅ Generate PO PDF
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setMessages(prev => [...prev, { 
+                          type: 'bot', 
+                          text: '📝 **Edit Mode Available**\n\nYou can modify any details before generating the PDF:\n\n• Type "edit supplier" to change supplier details\n• Type "edit items" to modify items\n• Type "add item: [description]" to add more items\n• Type "change gst to [rate]" to update GST\n\nOr type "**generate**" to proceed with PDF creation.',
+                          showPOButtons: false
+                        }]);
+                      }} 
+                      className="px-4 py-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded hover:bg-gray-50 transition-colors flex items-center gap-2"
+                    >
+                      ✏️ Edit Details
                     </button>
                   </div>
                 </div>

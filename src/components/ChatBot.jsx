@@ -35,13 +35,13 @@ export default function ChatBot({ businessInfo }) {
     
     // Use quotation data if available, otherwise use sample data
     const customer = quotationData?.customerName || 'ABC INDUSTRIES, COIMBATORE';
-    const items = quotationData?.items || [
+    const products = quotationData?.products || quotationData?.items || [
       { description: 'MS FLAT 40x6mm', qty: 5000, rate: 52, amount: 260000 },
       { description: 'ISMC 100x50', qty: 3000, rate: 56, amount: 168000 },
     ];
     
-    const totalQty = items.reduce((sum, item) => sum + parseFloat(item.qty || 0), 0);
-    const taxableAmount = items.reduce((sum, item) => sum + (item.amount || 0), 0);
+    const totalQty = products.reduce((sum, item) => sum + parseFloat(item.qty || 0), 0);
+    const taxableAmount = products.reduce((sum, item) => sum + (item.amount || 0), 0);
     const gst = taxableAmount * 0.18;
     const grandTotal = taxableAmount + gst;
     const transport = 'Included';
@@ -101,7 +101,7 @@ export default function ChatBot({ businessInfo }) {
     doc.autoTable({
       startY: y,
       head: [['Description', 'Qty (kg)', 'Rate (₹)', 'Amount (₹)']],
-      body: items.map(item => [
+      body: products.map(item => [
         item.description,
         parseFloat(item.qty || 0).toFixed(2),
         parseFloat(item.rate || 0).toFixed(2),

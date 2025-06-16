@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIBA - AI Business Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <h1 class="app-title">🤖 AIBA</h1>
+                    <span class="app-subtitle">AI Business Assistant</span>
+                </div>
+                <div class="header-actions">
+                    <button class="action-btn" onclick="resetChat()">
+                        <span class="btn-icon">🔄</span>
+                        Reset
+                    </button>
+                    <button class="action-btn" onclick="showHelp()">
+                        <span class="btn-icon">❓</span>
+                        Help
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Chat Container -->
+        <div class="chat-container">
+            <div class="chat-messages" id="chatMessages">
+                <!-- Welcome message will be inserted here -->
+            </div>
+            
+            <!-- Loading indicator -->
+            <div class="loading-indicator" id="loadingIndicator" style="display: none;">
+                <div class="loading-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <span class="loading-text">AIBA is thinking...</span>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-container">
+            <div class="input-wrapper">
+                <div class="quick-actions">
+                    <button class="quick-btn" onclick="insertQuickText('Create a quotation')">
+                        📋 Quote
+                    </button>
+                    <button class="quick-btn" onclick="insertQuickText('Create a purchase order')">
+                        📦 PO
+                    </button>
+                    <button class="quick-btn" onclick="insertQuickText('Help')">
+                        💡 Help
+                    </button>
+                    <button class="quick-btn settings-btn" onclick="window.location.href='/settings'">
+                        ⚙️ Settings
+                    </button>
+                </div>
+                
+                <div class="message-input-container">
+                    <textarea 
+                        id="messageInput" 
+                        class="message-input" 
+                        placeholder="Type your message here... (e.g., 'Quote for ABC Company - 5 MT steel at ₹50/kg')"
+                        rows="1"
+                    ></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                        <span class="send-icon">→</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PDF Generation Modal -->
+        <div class="modal" id="pdfModal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Generate PDF</h3>
+                    <button class="close-btn" onclick="closePdfModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p>Ready to generate your document!</p>
+                    <div class="pdf-actions">
+                        <button class="pdf-btn primary" onclick="generatePDF()">
+                            📄 Generate PDF
+                        </button>
+                        <button class="pdf-btn secondary" onclick="closePdfModal()">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toastContainer"></div>
+    </div>
+
+    <script>
+        // Global variables
+        let sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        let currentDocumentData = null;
+        let currentDocumentType = 'quotation';
+
+        // Initialize the app
+        document.addEventListener('DOMContentLoaded', function() {
+            // Show welcome message
+            addMessage('bot', getWelcomeMessage(), 'welcome');
+            
+            // Setup input handlers
+            setupInputHandlers();
+            
+            // Auto-resize textarea
+            setupTextareaResize();
+        });
+
+        function setupInputHandlers() {
+            const input = document.getElementById('messageInput');
+            const sendBtn = document.getElementById('sendBtn');
+
+            // Handle Enter key
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+
+            // Enable/disable send button based on input
+            input.addEventListener('input', function() {
+                const hasText = input.value.trim().length > 0;
+                sendBtn.disabled = !hasText;
+                sendBtn.classList.toggle('active', hasText);
+            });
+        }
+
+        function setupTextareaResize() {
+            const textarea = document.getElementById('messageInput');
+            
+            textarea.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+            });
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+
+            // Add user message to chat
+            addMessage('user', message);
+            
+            // Clear input
+            input.value = '';
+            input.style.height = 'auto';
+            
+            // Show loading
+            showLoading(true);
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        session_id: sessionId
+                    })
+                });
+
+                const data = await response.json();
+                
+                // Hide loading
+                showLoading(false);
+
+                // Add bot response
+                addMessage('bot', data.response, data.type);
+
+                // Handle special response types
+                if (data.type === 'confirmation' && data.data) {
+                    currentDocumentData = data.data;
+                    currentDocumentType = data.data.po_number ? 'purchase_order' : 'quotation';
+                    
+                    // Add action buttons for confirmation
+                    addActionButtons();
+                }
+
+            } catch (error) {
+                showLoading(false);
+                addMessage('bot', '❌ Sorry, I encountered an error. Please try again.', 'error');
+                showToast('Connection error. Please check your internet connection.', 'error');
+            }
+        }
+
+        function addMessage(sender, content, type = 'normal') {
+            const messagesContainer = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message ${type}`;
+
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            
+            // Convert markdown-style formatting to HTML
+            const formattedContent = formatMessageContent(content);
+            messageContent.innerHTML = formattedContent;
+
+            const timestamp = document.createElement('div');
+            timestamp.className = 'message-timestamp';
+            timestamp.textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+            messageDiv.appendChild(messageContent);
+            messageDiv.appendChild(timestamp);
+            messagesContainer.appendChild(messageDiv);
+
+            // Scroll to bottom
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function formatMessageContent(content) {
+            // Convert **text** to bold
+            content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            
+            // Convert line breaks to <br>
+            content = content.replace(/\n/g, '<br>');
+            
+            // Convert • to bullet points
+            content = content.replace(/^• (.+)$/gm, '<li>$1</li>');
+            
+            return content;
+        }
+
+        function addActionButtons() {
+            const messagesContainer = document.getElementById('chatMessages');
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'message-actions';
+
+            actionsDiv.innerHTML = `
+                <button class="action-btn primary" onclick="confirmDocument()">
+                    ✅ Yes, Generate PDF
+                </button>
+                <button class="action-btn secondary" onclick="editDocument()">
+                    ✏️ Edit Details
+                </button>
+            `;
+
+            messagesContainer.appendChild(actionsDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function confirmDocument() {
+            // Remove action buttons
+            const actions = document.querySelector('.message-actions');
+            if (actions) actions.remove();
+
+            // Generate PDF directly
+            generatePDF();
+        }
+
+        function editDocument() {
+            // Remove action buttons
+            const actions = document.querySelector('.message-actions');
+            if (actions) actions.remove();
+
+            // Add message asking what to edit
+            addMessage('bot', '✏️ What would you like to edit? You can say things like:<br>• "Change customer name to XYZ"<br>• "Add another item"<br>• "Update the rate"<br>• "Change transport terms"', 'question');
+        }
+
+        async function generatePDF() {
+            if (!currentDocumentData) {
+                showToast('No document data available. Please start over.', 'error');
+                return;
+            }
+
+            showLoading(true, 'Generating PDF...');
+
+            try {
+                const response = await fetch('/create-pdf', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        type: currentDocumentType
+                    })
+                });
+
+                const data = await response.json();
+                showLoading(false);
+
+                if (data.success) {
+                    addMessage('bot', `${data.message}<br><br>📥 <a href="/download/${data.pdf_path}" target="_blank" class="download-link">Download PDF</a>`, 'success');
+                    showToast('PDF generated successfully!', 'success');
+                    
+                    // Ask about saving customer
+                    if (currentDocumentData.customer_name) {
+                        setTimeout(() => {
+                            addMessage('bot', `💾 Would you like to save "${currentDocumentData.customer_name}" as a customer for future use? Type "yes" to save or "no" to skip.`, 'question');
+                        }, 1000);
+                    }
+                } else {
+                    addMessage('bot', `❌ ${data.message}`, 'error');
+                    showToast('Failed to generate PDF', 'error');
+                }
+
+            } catch (error) {
+                showLoading(false);
+                addMessage('bot', '❌ Failed to generate PDF. Please try again.', 'error');
+                showToast('PDF generation failed', 'error');
+            }
+        }
+
+        function showLoading(show, text = 'AIBA is thinking...') {
+            const loading = document.getElementById('loadingIndicator');
+            const loadingText = loading.querySelector('.loading-text');
+            
+            if (show) {
+                loadingText.textContent = text;
+                loading.style.display = 'flex';
+                
+                // Scroll to show loading
+                const container = document.getElementById('chatMessages');
+                setTimeout(() => {
+                    container.scrollTop = container.scrollHeight;
+                }, 100);
+            } else {
+                loading.style.display = 'none';
+            }
+        }
+
+        function insertQuickText(text) {
+            const input = document.getElementById('messageInput');
+            input.value = text;
+            input.focus();
+            
+            // Trigger input event to enable send button
+            input.dispatchEvent(new Event('input'));
+        }
+
+        async function resetChat() {
+            try {
+                await fetch('/reset', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: sessionId
+                    })
+                });
+
+                // Clear chat messages
+                document.getElementById('chatMessages').innerHTML = '';
+                
+                // Reset variables
+                currentDocumentData = null;
+                currentDocumentType = 'quotation';
+                
+                // Show welcome message
+                addMessage('bot', getWelcomeMessage(), 'welcome');
+                
+                showToast('Chat reset successfully', 'success');
+
+            } catch (error) {
+                showToast('Failed to reset chat', 'error');
+            }
+        }
+
+        function showHelp() {
+            const helpMessage = `🔧 **Available Commands:**
+
+📋 **For Quotations:**
+• "quote" or "quotation" - Start step-by-step
+• Or describe directly: "Quote for [Customer] - [Items] at [Rate]"
+
+📦 **For Purchase Orders:**
+• "po" or "purchase order" - Start step-by-step  
+• Or describe: "PO to [Supplier] - PO#[Number]"
+
+🔄 **Other Commands:**
+• "reset" - Start over
+• "help" - Show this message
+
+💡 **I understand natural language, so just describe what you need!**
+
+**Example:** "Quote for ABC Industries - 5 MT ISMC 100x50 at ₹56/kg, GST extra, transport included"`;
+
+            addMessage('bot', helpMessage, 'help');
+        }
+
+        function getWelcomeMessage() {
+            return `🤖 **Hi! I'm AIBA, your AI Business Assistant.**
+
+I can help you create:
+📋 **Quotations** - Type "quote" or describe what you need
+📦 **Purchase Orders** - Type "PO" or "purchase order"
+
+💡 **Quick Examples:**
+• "Quote for ABC Company - 5 MT ISMC 100x50 at ₹56/kg"
+• "Create PO for XYZ Suppliers - PO#12345"
+
+**Type your request or use the quick buttons below!**`;
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+
+            container.appendChild(toast);
+
+            // Show toast
+            setTimeout(() => toast.classList.add('show'), 100);
+
+            // Remove toast after 3 seconds
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => container.removeChild(toast), 300);
+            }, 3000);
+        }
+
+        function closePdfModal() {
+            document.getElementById('pdfModal').style.display = 'none';
+        }
+
+        // Prevent form submission on Enter in quick actions
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && e.target.classList.contains('quick-btn')) {
+                e.preventDefault();
+            }
+        });
+    </script>
+</body>
+</html> 
