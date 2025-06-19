@@ -33,4 +33,15 @@ yarn-error.log*
 *.sw?
 
 # Cursor
-.cursor/ 
+.cursor/
+
+# Firebase credentials
+firebase-auth.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# JSON backups
+json_backup_*/ 

@@ -1,1 +1,25 @@
-{}
+{
+  "VCfzYQ_MXMWHGLOjJjAoPA": {
+    "user_id": "VCfzYQ_MXMWHGLOjJjAoPA",
+    "business_info": {
+      "business_name": "IGNITE INDUSTRIAL CORPORATION",
+      "address": "No22 JONES STREET MANNADY",
+      "gstin": "33AAKFI5034N1Z6",
+      "state": "Tamil Nadu",
+      "country": "India",
+      "pincode": "600001",
+      "email": "igniteindustrialcorporation@gmail.com",
+      "phone": "+91 90036 94039",
+      "website": ""
+    },
+    "bank_info": {
+      "account_name": "SHAFEELAHAMED",
+      "account_number": "500101011681992",
+      "bank_name": "KARUR VYSYA BANK",
+      "ifsc_code": "CIUB0001011",
+      "branch": "BEEMANAGAR TRICHY"
+    },
+    "created_at": "2025-06-19T23:49:39.465575",
+    "updated_at": "2025-06-19T23:49:39.465666"
+  }
+}

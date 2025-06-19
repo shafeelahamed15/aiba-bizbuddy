@@ -39,12 +39,18 @@ def index():
 
 @app.route('/auth')
 def auth_page():
-    """Authentication page."""
-    # Check for error messages from OAuth
-    error = request.args.get('error')
-    message = request.args.get('message', '')
-    
-    return render_template('auth.html', error=error, message=message)
+    """Authentication page - redirect to login."""
+    return redirect(url_for('login_page'))
+
+@app.route('/login')
+def login_page():
+    """Login page."""
+    return render_template('login.html')
+
+@app.route('/signup')
+def signup_page():
+    """Signup page."""
+    return render_template('signup.html')
 
 @app.route('/profile-setup')
 @login_required

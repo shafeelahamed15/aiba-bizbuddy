@@ -238,28 +238,9 @@
     </div>
 
     <script>
-        // Google Sign In Function
+        // Redirect to dedicated login/signup pages
         function signInWithGoogle() {
-            console.log('Google Sign In button clicked');
-            showMessage('Redirecting to Google...', 'info');
-            
-            // Test if the endpoint is reachable
-            fetch('/auth/google/debug')
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Debug info:', data);
-                    if (data.google_available) {
-                        console.log('Google OAuth is available, proceeding...');
-                        window.location.href = '/auth/google/login';
-                    } else {
-                        console.log('Google OAuth not available:', data);
-                        showMessage('Google OAuth not configured properly', 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('Debug fetch failed:', error);
-                    showMessage('Google OAuth service error', 'error');
-                });
+            window.location.href = '/login';
         }
 
         // Tab switching
