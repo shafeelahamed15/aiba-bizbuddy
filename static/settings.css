@@ -1,1 +1,945 @@
- 
+/* =============================================================================
+   GROK-STYLE SETTINGS UI
+   Modern, sleek design with animations and gradients
+   ============================================================================= */
+
+:root {
+    /* Color Palette - Grok Style */
+    --bg-primary: #0a0a0a;
+    --bg-secondary: #111111;
+    --bg-tertiary: #1a1a1a;
+    --card-bg: rgba(20, 20, 20, 0.8);
+    --border-primary: rgba(255, 255, 255, 0.1);
+    --border-secondary: rgba(255, 255, 255, 0.05);
+    
+    /* Text Colors */
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.7);
+    --text-tertiary: rgba(255, 255, 255, 0.5);
+    --text-muted: rgba(255, 255, 255, 0.3);
+    
+    /* Accent Colors */
+    --accent-primary: #00d4ff;
+    --accent-secondary: #0099cc;
+    --accent-gradient: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+    --success: #00cc66;
+    --warning: #ff9900;
+    --error: #ff4444;
+    --info: #00d4ff;
+    
+    /* Shadows & Effects */
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+    --shadow-xl: 0 20px 64px rgba(0, 0, 0, 0.6);
+    --glow: 0 0 20px rgba(0, 212, 255, 0.3);
+    --glow-hover: 0 0 30px rgba(0, 212, 255, 0.5);
+    
+    /* Animations */
+    --transition-fast: 0.2s ease;
+    --transition-smooth: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    
+    /* Layout */
+    --border-radius: 12px;
+    --border-radius-lg: 16px;
+    --spacing-xs: 0.5rem;
+    --spacing-sm: 0.75rem;
+    --spacing-md: 1rem;
+    --spacing-lg: 1.5rem;
+    --spacing-xl: 2rem;
+    --spacing-2xl: 3rem;
+}
+
+/* =============================================================================
+   GLOBAL STYLES & RESET
+   ============================================================================= */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* =============================================================================
+   GROK SETTINGS BODY & BACKGROUND
+   ============================================================================= */
+
+.grok-settings-body {
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
+    opacity: 0;
+    transition: opacity 0.8s ease;
+}
+
+.grok-settings-body.loaded {
+    opacity: 1;
+}
+
+/* Background Gradient */
+.bg-gradient {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(ellipse at top, rgba(0, 212, 255, 0.1) 0%, transparent 50%),
+                radial-gradient(ellipse at bottom right, rgba(0, 153, 204, 0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at bottom left, rgba(0, 212, 255, 0.05) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: -2;
+}
+
+/* Grid Pattern */
+.bg-grid {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: 
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+    background-size: 50px 50px;
+    pointer-events: none;
+    z-index: -1;
+    animation: gridFloat 20s ease-in-out infinite;
+}
+
+@keyframes gridFloat {
+    0%, 100% { transform: translate(0, 0); }
+    33% { transform: translate(10px, -10px); }
+    66% { transform: translate(-5px, 15px); }
+}
+
+/* Floating Elements */
+.floating-elements {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: -1;
+}
+
+.floating-element {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    background: var(--accent-gradient);
+    border-radius: 50%;
+    opacity: 0.6;
+    animation: float 6s ease-in-out infinite;
+    animation-delay: var(--delay, 0s);
+    left: var(--x, 50%);
+    top: var(--y, 50%);
+    box-shadow: var(--glow);
+}
+
+@keyframes float {
+    0%, 100% { 
+        transform: translateY(0px) rotate(0deg);
+        opacity: 0.6;
+    }
+    50% { 
+        transform: translateY(-20px) rotate(180deg);
+        opacity: 1;
+    }
+}
+
+/* =============================================================================
+   MAIN CONTAINER & LAYOUT
+   ============================================================================= */
+
+.grok-settings-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--spacing-xl);
+    position: relative;
+    z-index: 1;
+}
+
+/* =============================================================================
+   HEADER SECTION
+   ============================================================================= */
+
+.grok-settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-2xl);
+    animation: slideInDown 0.8s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+.settings-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-lg);
+}
+
+.brand-icon {
+    width: 80px;
+    height: 80px;
+    background: var(--accent-gradient);
+    border-radius: var(--border-radius-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    box-shadow: var(--shadow-lg);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { box-shadow: var(--shadow-lg); }
+    50% { box-shadow: var(--glow-hover); }
+}
+
+.brand-text h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    background: var(--accent-gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 0.25rem;
+}
+
+.brand-text p {
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    font-weight: 400;
+}
+
+.header-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    align-items: center;
+}
+
+/* =============================================================================
+   BUTTONS
+   ============================================================================= */
+
+.grok-secondary-btn,
+.grok-outline-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    border-radius: var(--border-radius);
+    font-weight: 500;
+    text-decoration: none;
+    transition: var(--transition-smooth);
+    border: 1px solid var(--border-primary);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    backdrop-filter: blur(10px);
+}
+
+.grok-secondary-btn:hover,
+.grok-outline-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-primary);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+.grok-primary-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md) var(--spacing-xl);
+    background: var(--accent-gradient);
+    color: var(--bg-primary);
+    border: none;
+    border-radius: var(--border-radius);
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+}
+
+.grok-primary-btn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    transition: left 0.5s;
+}
+
+.grok-primary-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+}
+
+.grok-primary-btn:hover::before {
+    left: 100%;
+}
+
+.grok-primary-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.btn-text {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.btn-loader {
+    display: none;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.grok-primary-btn.loading .btn-text {
+    display: none;
+}
+
+.grok-primary-btn.loading .btn-loader {
+    display: flex;
+}
+
+.spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top: 2px solid var(--bg-primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* =============================================================================
+   TABS NAVIGATION
+   ============================================================================= */
+
+.grok-tabs-container {
+    margin-bottom: var(--spacing-2xl);
+    animation: slideInUp 0.8s cubic-bezier(0.68, -0.55, 0.265, 1.55) 0.2s both;
+}
+
+.grok-tabs {
+    display: flex;
+    background: var(--card-bg);
+    border-radius: var(--border-radius-lg);
+    padding: var(--spacing-xs);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border-primary);
+    box-shadow: var(--shadow-md);
+}
+
+.grok-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md) var(--spacing-lg);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: var(--border-radius);
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    position: relative;
+}
+
+.grok-tab.active {
+    background: var(--accent-gradient);
+    color: var(--bg-primary);
+    box-shadow: var(--shadow-sm);
+}
+
+.grok-tab:not(.active):hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.tab-icon {
+    font-size: 1.2rem;
+}
+
+.tab-text {
+    font-size: 0.95rem;
+}
+
+/* =============================================================================
+   CONTENT CONTAINER
+   ============================================================================= */
+
+.grok-content-container {
+    animation: slideInUp 0.8s cubic-bezier(0.68, -0.55, 0.265, 1.55) 0.4s both;
+}
+
+.grok-tab-content {
+    display: none;
+    opacity: 0;
+    transition: opacity var(--transition-smooth);
+}
+
+.grok-tab-content.active {
+    display: block;
+    opacity: 1;
+}
+
+/* =============================================================================
+   SETTINGS CARD
+   ============================================================================= */
+
+.grok-settings-card {
+    background: var(--card-bg);
+    border-radius: var(--border-radius-lg);
+    padding: var(--spacing-2xl);
+    border: 1px solid var(--border-primary);
+    backdrop-filter: blur(10px);
+    box-shadow: var(--shadow-lg);
+    position: relative;
+    overflow: hidden;
+}
+
+.grok-settings-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--accent-gradient);
+    opacity: 0.5;
+}
+
+.grok-card-header {
+    margin-bottom: var(--spacing-2xl);
+    text-align: center;
+}
+
+.grok-card-header h2 {
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--spacing-sm);
+}
+
+.grok-card-header p {
+    color: var(--text-secondary);
+    font-size: 1rem;
+}
+
+/* =============================================================================
+   FORM STYLES
+   ============================================================================= */
+
+.grok-form {
+    width: 100%;
+}
+
+.grok-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: var(--spacing-lg);
+    margin-bottom: var(--spacing-2xl);
+}
+
+.grok-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.grok-form-group.full-width {
+    grid-column: 1 / -1;
+}
+
+.grok-label {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    position: relative;
+}
+
+.grok-label.required::after {
+    content: '*';
+    color: var(--error);
+    margin-left: 4px;
+}
+
+.grok-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.grok-input-wrapper.focused {
+    transform: translateY(-1px);
+}
+
+.grok-input-wrapper.focused .input-icon {
+    color: var(--accent-primary);
+    transform: scale(1.1);
+}
+
+.grok-input {
+    width: 100%;
+    padding: var(--spacing-md) var(--spacing-lg);
+    padding-right: 3rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--border-radius);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-family: inherit;
+    transition: var(--transition-smooth);
+    outline: none;
+}
+
+.grok-input:focus {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+    background: var(--bg-secondary);
+}
+
+.grok-input::placeholder {
+    color: var(--text-muted);
+}
+
+.grok-textarea {
+    resize: vertical;
+    min-height: 100px;
+}
+
+.input-icon {
+    position: absolute;
+    right: var(--spacing-md);
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    transition: var(--transition-smooth);
+    pointer-events: none;
+}
+
+.grok-form-actions {
+    display: flex;
+    justify-content: center;
+    padding-top: var(--spacing-lg);
+    border-top: 1px solid var(--border-secondary);
+}
+
+/* =============================================================================
+   STATS SECTION
+   ============================================================================= */
+
+.grok-stats-section {
+    margin-bottom: var(--spacing-2xl);
+}
+
+.grok-stats-section h3 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.grok-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--spacing-lg);
+}
+
+.grok-stat-card {
+    background: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-lg);
+    border: 1px solid var(--border-secondary);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    transition: var(--transition-smooth);
+}
+
+.grok-stat-card:hover {
+    background: var(--bg-secondary);
+    border-color: var(--accent-primary);
+    transform: translateY(-2px);
+}
+
+.stat-icon {
+    font-size: 2rem;
+    color: var(--accent-primary);
+}
+
+.stat-content {
+    flex: 1;
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.stat-label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* =============================================================================
+   SECURITY SECTION
+   ============================================================================= */
+
+.grok-security-section {
+    margin-bottom: var(--spacing-2xl);
+}
+
+.grok-security-section h3 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.grok-action-cards {
+    display: grid;
+    gap: var(--spacing-md);
+}
+
+.grok-action-card {
+    background: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-lg);
+    border: 1px solid var(--border-secondary);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-lg);
+    cursor: pointer;
+    transition: var(--transition-smooth);
+}
+
+.grok-action-card:hover {
+    background: var(--bg-secondary);
+    border-color: var(--accent-primary);
+    transform: translateY(-2px);
+}
+
+.action-icon {
+    width: 48px;
+    height: 48px;
+    background: var(--accent-gradient);
+    border-radius: var(--border-radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+
+.action-content {
+    flex: 1;
+}
+
+.action-content h4 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.action-content p {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.action-arrow {
+    font-size: 1.2rem;
+    color: var(--text-muted);
+    transition: var(--transition-smooth);
+}
+
+.grok-action-card:hover .action-arrow {
+    color: var(--accent-primary);
+    transform: translateX(4px);
+}
+
+/* =============================================================================
+   DANGER ZONE
+   ============================================================================= */
+
+.grok-danger-section {
+    background: rgba(255, 68, 68, 0.05);
+    border: 1px solid rgba(255, 68, 68, 0.2);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-lg);
+}
+
+.grok-danger-section h3 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--error);
+    margin-bottom: var(--spacing-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.danger-warning {
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-lg);
+    font-size: 0.9rem;
+}
+
+.grok-danger-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.grok-danger-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    background: transparent;
+    border: 1px solid var(--error);
+    color: var(--error);
+    border-radius: var(--border-radius);
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+}
+
+.grok-danger-btn:hover {
+    background: var(--error);
+    color: var(--bg-primary);
+    transform: translateY(-1px);
+}
+
+.grok-danger-btn.critical {
+    background: var(--error);
+    color: var(--bg-primary);
+}
+
+.grok-danger-btn.critical:hover {
+    background: #cc0000;
+    box-shadow: var(--shadow-md);
+}
+
+/* =============================================================================
+   MESSAGE SYSTEM
+   ============================================================================= */
+
+.grok-message-container {
+    position: fixed;
+    top: var(--spacing-lg);
+    right: var(--spacing-lg);
+    z-index: 1000;
+    opacity: 0;
+    transform: translateX(100%);
+    transition: var(--transition-smooth);
+}
+
+.grok-message-container.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.grok-message {
+    background: var(--card-bg);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-lg);
+    max-width: 400px;
+    backdrop-filter: blur(10px);
+    box-shadow: var(--shadow-lg);
+    color: var(--text-primary);
+}
+
+.grok-message-container.success .grok-message {
+    border-color: var(--success);
+    background: rgba(0, 204, 102, 0.1);
+}
+
+.grok-message-container.error .grok-message {
+    border-color: var(--error);
+    background: rgba(255, 68, 68, 0.1);
+}
+
+.grok-message-container.info .grok-message {
+    border-color: var(--info);
+    background: rgba(0, 212, 255, 0.1);
+}
+
+/* =============================================================================
+   ANIMATIONS
+   ============================================================================= */
+
+@keyframes slideInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* =============================================================================
+   RESPONSIVE DESIGN
+   ============================================================================= */
+
+@media (max-width: 1024px) {
+    .grok-settings-container {
+        padding: var(--spacing-lg);
+    }
+    
+    .grok-form-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 768px) {
+    .grok-settings-header {
+        flex-direction: column;
+        gap: var(--spacing-lg);
+        text-align: center;
+    }
+    
+    .settings-brand {
+        flex-direction: column;
+        gap: var(--spacing-md);
+    }
+    
+    .brand-icon {
+        width: 60px;
+        height: 60px;
+        font-size: 1.5rem;
+    }
+    
+    .brand-text h1 {
+        font-size: 2rem;
+    }
+    
+    .grok-tabs {
+        flex-direction: column;
+    }
+    
+    .grok-settings-card {
+        padding: var(--spacing-lg);
+    }
+    
+    .grok-stats-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .grok-danger-actions {
+        flex-direction: column;
+    }
+    
+    .grok-message-container {
+        top: var(--spacing-sm);
+        right: var(--spacing-sm);
+        left: var(--spacing-sm);
+    }
+}
+
+@media (max-width: 480px) {
+    .grok-settings-container {
+        padding: var(--spacing-md);
+    }
+    
+    .brand-text h1 {
+        font-size: 1.5rem;
+    }
+    
+    .grok-tab {
+        flex-direction: column;
+        gap: var(--spacing-xs);
+        padding: var(--spacing-sm);
+    }
+    
+    .tab-text {
+        font-size: 0.8rem;
+    }
+}
+
+/* =============================================================================
+   ACCESSIBILITY
+   ============================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+    
+    .floating-element {
+        animation: none;
+    }
+    
+    .bg-grid {
+        animation: none;
+    }
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.no-scroll {
+    overflow: hidden;
+} 

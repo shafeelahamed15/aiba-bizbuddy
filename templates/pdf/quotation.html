@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quotation - {{ company_name }}</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: #1a202c;
+            background: #ffffff;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+        }
+        
+        /* Header Section */
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 50px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: pulse 6s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .header-content {
+            position: relative;
+            z-index: 2;
+        }
+        
+        .company-name {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: -1px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .company-tagline {
+            font-size: 16px;
+            opacity: 0.9;
+            margin-bottom: 20px;
+            font-weight: 300;
+        }
+        
+        .company-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            font-size: 14px;
+            opacity: 0.95;
+        }
+        
+        .contact-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .contact-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .contact-icon {
+            width: 16px;
+            height: 16px;
+            opacity: 0.8;
+        }
+        
+        /* Main Content */
+        .content {
+            padding: 40px 50px;
+        }
+        
+        .document-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #e2e8f0;
+        }
+        
+        .document-title {
+            font-size: 32px;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 8px;
+        }
+        
+        .document-subtitle {
+            font-size: 16px;
+            color: #718096;
+            font-weight: 400;
+        }
+        
+        .document-meta {
+            text-align: right;
+            font-size: 14px;
+            color: #4a5568;
+        }
+        
+        .meta-item {
+            margin-bottom: 8px;
+        }
+        
+        .meta-label {
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        /* Customer Section */
+        .customer-section {
+            background: #f8fafc;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .customer-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+        
+        .customer-name {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a202c;
+            margin-bottom: 5px;
+        }
+        
+        /* Items Table */
+        .items-section {
+            margin: 40px 0;
+        }
+        
+        .section-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .items-table th {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+            color: white;
+            padding: 18px 16px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .items-table td {
+            padding: 16px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 14px;
+        }
+        
+        .items-table tbody tr:hover {
+            background: #f8fafc;
+        }
+        
+        .items-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .item-description {
+            font-weight: 500;
+            color: #2d3748;
+        }
+        
+        .item-quantity {
+            text-align: center;
+            font-weight: 500;
+        }
+        
+        .item-rate, .item-amount {
+            text-align: right;
+            font-weight: 500;
+            color: #2d3748;
+        }
+        
+        .currency {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        /* Totals Section */
+        .totals-section {
+            margin-top: 30px;
+            display: flex;
+            justify-content: flex-end;
+        }
+        
+        .totals-table {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 25px;
+            min-width: 350px;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .total-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            font-size: 16px;
+        }
+        
+        .total-row:not(:last-child) {
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .total-label {
+            font-weight: 500;
+            color: #4a5568;
+        }
+        
+        .total-amount {
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        .final-total {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin: 15px -25px -25px;
+            padding: 20px 25px;
+            border-radius: 0 0 12px 12px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        
+        /* Terms Section */
+        .terms-section {
+            margin-top: 40px;
+            background: #f8fafc;
+            padding: 30px;
+            border-radius: 12px;
+            border-left: 4px solid #48bb78;
+        }
+        
+        .terms-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 15px;
+        }
+        
+        .terms-list {
+            list-style: none;
+            padding: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-content">
+                <h1 class="company-name">{{ company_name }}</h1>
+                <p class="company-tagline">{{ company_tagline }}</p>
+                <div class="company-details">
+                    <div class="contact-info">
+                        <div class="contact-item">
+                            <img src="{{ url_for('static', filename='images/location.png') }}" alt="Location" class="contact-icon">
+                            <span>{{ address }}</span>
+                        </div>
+                        <div class="contact-item">
+                            <img src="{{ url_for('static', filename='images/phone.png') }}" alt="Phone" class="contact-icon">
+                            <span>{{ phone }}</span>
+                        </div>
+                        <div class="contact-item">
+                            <img src="{{ url_for('static', filename='images/email.png') }}" alt="Email" class="contact-icon">
+                            <span>{{ email }}</span>
+                        </div>
+                        <div class="contact-item">
+                            <img src="{{ url_for('static', filename='images/website.png') }}" alt="Website" class="contact-icon">
+                            <span>{{ website }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="content">
+            <div class="document-header">
+                <div>
+                    <h2 class="document-title">{{ document_title }}</h2>
+                    <p class="document-subtitle">{{ document_subtitle }}</p>
+                </div>
+                <div class="document-meta">
+                    <div class="meta-item">
+                        <span class="meta-label">Quotation Number:</span>
+                        <span>{{ quote_number }}</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Date:</span>
+                        <span>{{ date }}</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Validity Date:</span>
+                        <span>{{ validity_date }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="customer-section">
+                <h3 class="customer-title">Customer Details</h3>
+                <p class="customer-name">{{ customer_name }}</p>
+            </div>
+            <div class="items-section">
+                <h4 class="section-title">Items</h4>
+                <table class="items-table">
+                    <thead>
+                        <tr>
+                            <th>Description</th>
+                            <th>Quantity</th>
+                            <th>Rate</th>
+                            <th>Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                        <tr>
+                            <td class="item-description">{{ item.description }}</td>
+                            <td class="item-quantity">{{ item.quantity }}</td>
+                            <td class="item-rate">{{ item.rate }}</td>
+                            <td class="item-amount">{{ item.amount }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="totals-section">
+                <h4 class="section-title">Totals</h4>
+                <table class="totals-table">
+                    <tbody>
+                        <tr>
+                            <td class="total-row">
+                                <span class="total-label">Subtotal:</span>
+                                <span class="total-amount">{{ subtotal }}</span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="total-row">
+                                <span class="total-label">GST ({{ gst_rate }}%):</span>
+                                <span class="total-amount">{{ gst_amount }}</span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="total-row">
+                                <span class="total-label">Total:</span>
+                                <span class="total-amount">{{ total_amount }}</span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="terms-section">
+                <h4 class="terms-title">Terms and Conditions</h4>
+                <ul class="terms-list">
+                    {% for term in terms %}
+                    <li>{{ term }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 

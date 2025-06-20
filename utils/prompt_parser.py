@@ -46,6 +46,106 @@ class PromptParser:
             'round 20': 2.47, 'round 25': 3.85, 'round 32': 6.31, 'round 40': 9.87,
         }
         
+    def interpret_incomplete_quote(self, user_input: str) -> Optional[Dict]:
+        """
+        ✨ Interpret Incomplete Quote Input
+        
+        When the user gives an input like:
+        "Quote for ABC Company – 5 MT ISMC 100x50 at ₹56/kg"
+        
+        Extract and infer:
+        - Customer Name: ABC Company
+        - Material: ISMC 100x50
+        - Quantity: 5 MT (1 MT = 1000 kg → Quantity = 5000.00 kg)
+        - Rate: ₹56.00 per kg
+        - Amount = 5000.00 × 56.00 = ₹280,000.00
+        
+        Then compute:
+        - Subtotal = ₹280,000.00
+        - GST @18% = ₹50,400.00
+        - Grand Total = ₹330,400.00
+        """
+        
+        # Enhanced pattern to capture incomplete quote format
+        patterns = [
+            # "Quote for ABC Company – 5 MT ISMC 100x50 at ₹56/kg"
+            r'(?:quote|quotation)?\s*(?:for|to)\s+([^–-]+?)(?:\s*[–-]\s*)?(\d+(?:\.\d+)?)\s*(MT|KG|TON|TONNE)\s+([A-Za-z0-9\s\×x/.-]+?)\s+(?:at|@)\s*(?:₹|Rs\.?|INR)?\s*(\d+(?:\.\d+)?)(?:/kg|per\s*kg|/KG)?',
+            
+            # "ABC Company needs 5 MT ISMC 100x50 @ ₹56/kg"
+            r'([^@]+?)\s*(?:needs?|wants?|requires?)\s*(\d+(?:\.\d+)?)\s*(MT|KG|TON|TONNE)\s+([A-Za-z0-9\s\×x/.-]+?)\s*@\s*(?:₹|Rs\.?|INR)?\s*(\d+(?:\.\d+)?)(?:/kg|per\s*kg|/KG)?',
+            
+            # "5 MT ISMC 100x50 for ABC Company at ₹56/kg"
+            r'(\d+(?:\.\d+)?)\s*(MT|KG|TON|TONNE)\s+([A-Za-z0-9\s\×x/.-]+?)\s*(?:for|to)\s+([^@]+?)\s+(?:at|@)\s*(?:₹|Rs\.?|INR)?\s*(\d+(?:\.\d+)?)(?:/kg|per\s*kg|/KG)?'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, user_input, re.IGNORECASE)
+            if match:
+                groups = match.groups()
+                
+                # Parse based on pattern structure
+                if len(groups) == 5:
+                    if pattern == patterns[0]:  # Standard format
+                        customer_name, qty_str, unit, material, rate_str = groups
+                    elif pattern == patterns[1]:  # Customer needs format
+                        customer_name, qty_str, unit, material, rate_str = groups
+                    else:  # Quantity first format
+                        qty_str, unit, material, customer_name, rate_str = groups
+                    
+                    # Clean and process data
+                    customer_name = customer_name.strip().rstrip('–-,')
+                    material = material.strip()
+                    qty_value = float(qty_str)
+                    rate = float(rate_str)
+                    
+                    # Convert units to KG
+                    if unit.upper() in ['MT', 'TON', 'TONNE']:
+                        qty_in_kg = qty_value * 1000
+                        original_qty_display = f"{qty_value} {unit.upper()}"
+                    elif unit.upper() == 'KG':
+                        qty_in_kg = qty_value
+                        original_qty_display = f"{qty_value} KG"
+                    else:
+                        qty_in_kg = qty_value
+                        original_qty_display = f"{qty_value} {unit}"
+                    
+                    # Calculate amounts
+                    amount = qty_in_kg * rate
+                    subtotal = amount
+                    gst = subtotal * 0.18
+                    grand_total = subtotal + gst
+                    
+                    # Format material description with original quantity
+                    description = f"{material} ({original_qty_display})"
+                    
+                    return {
+                        'customer_name': customer_name,
+                        'customer_address': '',  # Will be filled by default or user input
+                        'customer_email': '',
+                        'customer_gstin': '',
+                        'items': [{
+                            'description': description,
+                            'quantity': qty_in_kg,
+                            'rate': rate,
+                            'amount': amount
+                        }],
+                        'subtotal': subtotal,
+                        'gst_rate': 18,
+                        'gst_amount': gst,
+                        'grand_total': grand_total,
+                        'loading_charges': 'Included',
+                        'transport_charges': 'Included',
+                        'payment_terms': 'Included',
+                        'bank_details': {
+                            'account_name': 'IGNITE INDUSTRIAL CORPORATION',
+                            'account_number': '19410130000000018',
+                            'ifsc': 'KVBL0001941',
+                            'branch': 'KVB Bank, BEEMANAGAR TRICHY'
+                        }
+                    }
+        
+        return None
+
     def detect_intent(self, user_input: str) -> str:
         """
         Detect if user wants to create a quotation, purchase order, or general query.
@@ -67,7 +167,15 @@ class PromptParser:
     def extract_quotation_data(self, user_input: str) -> Optional[Dict]:
         """
         Extract quotation details from user input using advanced patterns.
+        First try incomplete quote interpretation, then fall back to detailed parsing.
         """
+        
+        # Try incomplete quote interpretation first
+        incomplete_quote = self.interpret_incomplete_quote(user_input)
+        if incomplete_quote:
+            return incomplete_quote
+        
+        # Fall back to detailed parsing
         data = {}
         
         # Extract customer name patterns
@@ -193,23 +301,20 @@ class PromptParser:
     def _extract_items(self, text: str) -> List[Dict]:
         """
         Extract items with quantities, rates, and units from text.
-        Supports complex steel industry formats.
+        Supports complex steel industry formats with MT to KG conversion.
         """
         items = []
         
-        # Pattern for complex steel descriptions
-        # Example: "ISMC 100x50 – 5 MT at ₹56/kg"
-        # Example: "MS Channel 75x40x6mm – 140 Nos @ ₹50/kg"
-        
+        # Enhanced patterns for better steel industry parsing
         patterns = [
             # Pattern 1: [Description] - [Qty] [Unit] at/@ [Rate]
-            r'([A-Za-z\s\d×x/.-]+?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*(MT|kg|nos|pcs|units?|meters?|mtrs?)\s*(?:at|@)\s*₹?(\d+(?:,\d+)*(?:\.\d+)?)\s*/?(\w+)?',
+            r'([A-Za-z\s\d×x/.-]+?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*(MT|KG|TON|TONNE|kg|nos|pcs|units?|meters?|mtrs?)\s*(?:at|@)\s*₹?(\d+(?:,\d+)*(?:\.\d+)?)\s*/?(\w+)?',
             
             # Pattern 2: [Qty] [Unit] [Description] at/@ [Rate]
-            r'(\d+(?:\.\d+)?)\s*(MT|kg|nos|pcs|units?|meters?|mtrs?)\s+([A-Za-z\s\d×x/.-]+?)\s*(?:at|@)\s*₹?(\d+(?:,\d+)*(?:\.\d+)?)\s*/?(\w+)?',
+            r'(\d+(?:\.\d+)?)\s*(MT|KG|TON|TONNE|kg|nos|pcs|units?|meters?|mtrs?)\s+([A-Za-z\s\d×x/.-]+?)\s*(?:at|@)\s*₹?(\d+(?:,\d+)*(?:\.\d+)?)\s*/?(\w+)?',
             
             # Pattern 3: [Description] [Qty] [Unit] [Rate]
-            r'([A-Za-z\s\d×x/.-]+?)\s+(\d+(?:\.\d+)?)\s*(MT|kg|nos|pcs|units?|meters?|mtrs?)\s+₹?(\d+(?:,\d+)*(?:\.\d+)?)\s*/?(\w+)?',
+            r'([A-Za-z\s\d×x/.-]+?)\s+(\d+(?:\.\d+)?)\s*(MT|KG|TON|TONNE|kg|nos|pcs|units?|meters?|mtrs?)\s+₹?(\d+(?:,\d+)*(?:\.\d+)?)\s*/?(\w+)?',
         ]
         
         for pattern in patterns:
@@ -220,31 +325,39 @@ class PromptParser:
                 if len(groups) >= 4:
                     if pattern == patterns[1]:  # Pattern 2: qty first
                         qty, unit, desc, rate = groups[0], groups[1], groups[2], groups[3]
-                        rate_unit = groups[4] if len(groups) > 4 and groups[4] else unit
+                        rate_unit = groups[4] if len(groups) > 4 and groups[4] else 'kg'
                     else:  # Pattern 1 and 3: description first
                         desc, qty, unit, rate = groups[0], groups[1], groups[2], groups[3]
-                        rate_unit = groups[4] if len(groups) > 4 and groups[4] else unit
+                        rate_unit = groups[4] if len(groups) > 4 and groups[4] else 'kg'
                     
                     # Clean and format the data
                     description = self._clean_description(desc)
-                    quantity = float(qty)
-                    unit = self._normalize_unit(unit)
+                    qty_value = float(qty)
+                    unit_normalized = self._normalize_unit(unit)
                     rate = float(rate.replace(',', ''))
-                    rate_unit = self._normalize_unit(rate_unit) if rate_unit else unit
                     
-                    # Calculate weight if necessary
-                    weight_kg = self._calculate_weight(description, quantity, unit)
+                    # ✅ Fix for MT to KG conversion
+                    if unit_normalized.upper() in ['MT', 'TON', 'TONNE']:
+                        qty_in_kg = qty_value * 1000
+                        original_qty_display = f"{qty_value} {unit_normalized.upper()}"
+                        # Update description to include original quantity
+                        description = f"{description} ({original_qty_display})"
+                    elif unit_normalized.upper() == 'KG':
+                        qty_in_kg = qty_value
+                    else:
+                        qty_in_kg = qty_value  # For nos, pcs, etc.
+                    
+                    # Calculate amount
+                    amount = qty_in_kg * rate
                     
                     item = {
                         'description': description,
-                        'quantity': quantity,
-                        'unit': unit,
+                        'quantity': qty_in_kg,
                         'rate': rate,
-                        'rate_unit': rate_unit,
+                        'amount': amount,
+                        'original_quantity': qty_value,
+                        'original_unit': unit_normalized
                     }
-                    
-                    if weight_kg:
-                        item['weight_kg'] = weight_kg
                         
                     items.append(item)
         
@@ -306,23 +419,29 @@ class PromptParser:
         return desc
         
     def _normalize_unit(self, unit: str) -> str:
-        """Normalize unit names."""
+        """Normalize unit names with MT/KG support."""
         if not unit:
-            return 'nos'
+            return 'KG'
             
         unit = unit.lower().strip()
         
-        # Standardize units
-        if unit in ['mt', 'metric ton', 'ton', 'tonne']:
+        # Metric tons
+        if unit in ['mt', 'ton', 'tonne', 'tons', 'tonnes']:
             return 'MT'
-        elif unit in ['kg', 'kgs', 'kilogram', 'kilograms']:
-            return 'kg'
-        elif unit in ['nos', 'no', 'numbers', 'pcs', 'pieces', 'units', 'unit']:
-            return 'nos'
-        elif unit in ['meter', 'meters', 'mtr', 'mtrs', 'm']:
-            return 'meters'
-        else:
-            return unit
+        
+        # Kilograms
+        if unit in ['kg', 'kgs', 'kilogram', 'kilograms']:
+            return 'KG'
+            
+        # Numbers/pieces
+        if unit in ['nos', 'no', 'pcs', 'pc', 'pieces', 'piece', 'units', 'unit']:
+            return 'Nos'
+            
+        # Length
+        if unit in ['m', 'meter', 'meters', 'mtr', 'mtrs']:
+            return 'Mtr'
+            
+        return unit.upper()
             
     def _calculate_weight(self, description: str, quantity: float, unit: str) -> Optional[float]:
         """Calculate weight in kg for steel items."""

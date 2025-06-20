@@ -17,6 +17,10 @@
                     <span class="app-subtitle">AI Business Assistant</span>
                 </div>
                 <div class="header-actions">
+                    <button class="action-btn" onclick="showDocuments()">
+                        <span class="btn-icon">📄</span>
+                        Documents
+                    </button>
                     <button class="action-btn" onclick="resetChat()">
                         <span class="btn-icon">🔄</span>
                         Reset
@@ -94,6 +98,34 @@
                         <button class="pdf-btn secondary" onclick="closePdfModal()">
                             Cancel
                         </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Documents Modal -->
+        <div class="modal" id="documentsModal" style="display: none;">
+            <div class="modal-content documents-modal">
+                <div class="modal-header">
+                    <h3>📄 My Documents</h3>
+                    <button class="close-btn" onclick="closeDocumentsModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="documents-controls">
+                        <div class="search-container">
+                            <input type="text" id="documentSearch" placeholder="Search documents..." class="search-input">
+                            <button class="search-btn" onclick="searchDocuments()">🔍</button>
+                        </div>
+                        <div class="filter-container">
+                            <select id="documentTypeFilter" onchange="filterDocuments()">
+                                <option value="">All Types</option>
+                                <option value="quotation">Quotations</option>
+                                <option value="purchase_order">Purchase Orders</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="documents-list" id="documentsList">
+                        <div class="loading-documents">Loading documents...</div>
                     </div>
                 </div>
             </div>
@@ -193,6 +225,9 @@
                     
                     // Add action buttons for confirmation
                     addActionButtons();
+                } else if (data.show_skip_button) {
+                    // Add skip button for customer details or terms collection
+                    addSkipButton(data.skip_button_text || 'Skip');
                 }
 
             } catch (error) {
@@ -255,6 +290,75 @@
 
             messagesContainer.appendChild(actionsDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function addSkipButton(buttonText = 'Skip') {
+            const messagesContainer = document.getElementById('chatMessages');
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'message-actions skip-actions';
+
+            actionsDiv.innerHTML = `
+                <button class="action-btn skip-btn" onclick="skipField()">
+                    ⏭️ ${buttonText}
+                </button>
+            `;
+
+            messagesContainer.appendChild(actionsDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function skipField() {
+            // Remove skip button
+            const actions = document.querySelector('.skip-actions');
+            if (actions) actions.remove();
+
+            // Send "skip" message automatically
+            sendSkipMessage();
+        }
+
+        async function sendSkipMessage() {
+            // Add user message showing they skipped
+            addMessage('user', 'skip');
+            
+            // Show loading
+            showLoading(true);
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: 'skip',
+                        session_id: sessionId
+                    })
+                });
+
+                const data = await response.json();
+                
+                // Hide loading
+                showLoading(false);
+
+                // Add bot response
+                addMessage('bot', data.response, data.type);
+
+                // Handle special response types
+                if (data.type === 'confirmation' && data.data) {
+                    currentDocumentData = data.data;
+                    currentDocumentType = data.data.po_number ? 'purchase_order' : 'quotation';
+                    
+                    // Add action buttons for confirmation
+                    addActionButtons();
+                } else if (data.show_skip_button) {
+                    // Add skip button for next field
+                    addSkipButton(data.skip_button_text || 'Skip');
+                }
+
+            } catch (error) {
+                showLoading(false);
+                addMessage('bot', '❌ Sorry, I encountered an error. Please try again.', 'error');
+            }
         }
 
         function confirmDocument() {
@@ -416,23 +520,319 @@ I can help you create:
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
             toast.className = `toast toast-${type}`;
-            toast.textContent = message;
+            
+            // Add icon based on type
+            let icon = '';
+            switch(type) {
+                case 'success': icon = '✅ '; break;
+                case 'error': icon = '❌ '; break;
+                case 'info': icon = 'ℹ️ '; break;
+                default: icon = '💬 '; break;
+            }
+            
+            toast.innerHTML = `${icon}${message}`;
 
             container.appendChild(toast);
 
-            // Show toast
+            // Show toast with animation
             setTimeout(() => toast.classList.add('show'), 100);
 
-            // Remove toast after 3 seconds
+            // Remove toast after duration based on type
+            const duration = type === 'error' ? 5000 : 3000;
             setTimeout(() => {
                 toast.classList.remove('show');
-                setTimeout(() => container.removeChild(toast), 300);
-            }, 3000);
+                setTimeout(() => {
+                    if (container.contains(toast)) {
+                        container.removeChild(toast);
+                    }
+                }, 300);
+            }, duration);
         }
 
         function closePdfModal() {
             document.getElementById('pdfModal').style.display = 'none';
         }
+
+        // ========================================
+        // DOCUMENT MANAGEMENT FUNCTIONS
+        // ========================================
+
+        async function showDocuments() {
+            const modal = document.getElementById('documentsModal');
+            modal.style.display = 'block';
+            await loadDocuments();
+        }
+
+        function closeDocumentsModal() {
+            document.getElementById('documentsModal').style.display = 'none';
+        }
+
+        async function loadDocuments() {
+            const documentsList = document.getElementById('documentsList');
+            documentsList.innerHTML = '<div class="loading-documents">📄 Loading documents...</div>';
+
+            try {
+                const response = await fetch('/documents');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+
+                if (data.success) {
+                    displayDocuments(data.documents);
+                    if (data.documents.length > 0) {
+                        showToast(`Loaded ${data.documents.length} document${data.documents.length === 1 ? '' : 's'}`, 'success');
+                    }
+                } else {
+                    documentsList.innerHTML = `
+                        <div class="error-message">
+                            Failed to load documents<br>
+                            <small>${data.message || 'Unknown error occurred'}</small>
+                        </div>
+                    `;
+                    showToast(`Failed to load documents: ${data.message || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Error loading documents:', error);
+                documentsList.innerHTML = `
+                    <div class="error-message">
+                        Error loading documents<br>
+                        <small>Please check your connection and try again</small>
+                        <br><br>
+                        <button class="doc-btn view-btn" onclick="loadDocuments()" style="margin-top: 10px;">
+                            🔄 Retry
+                        </button>
+                    </div>
+                `;
+                showToast('Error loading documents. Please try again.', 'error');
+            }
+        }
+
+        function displayDocuments(documents) {
+            const documentsList = document.getElementById('documentsList');
+            
+            if (documents.length === 0) {
+                documentsList.innerHTML = `
+                    <div class="no-documents">
+                        📄 No documents found.<br>
+                        <small>Create your first quotation or purchase order to get started!</small>
+                    </div>
+                `;
+                return;
+            }
+
+            const documentsHTML = documents.map(doc => {
+                // Safely handle document properties
+                const docName = doc.document_name || 'Untitled Document';
+                const customerName = doc.customer_name || 'Unknown Customer';
+                const docType = doc.document_type || 'document';
+                const docDate = doc.created_at_str || 'Unknown date';
+                const docId = doc.document_id || doc.id || '';
+                
+                // Format total amount
+                let totalDisplay = '';
+                if (doc.grand_total && typeof doc.grand_total === 'number') {
+                    totalDisplay = `<span class="document-total">Total: ₹${doc.grand_total.toLocaleString('en-IN', {maximumFractionDigits: 2})}</span>`;
+                }
+                
+                // Document type icon and display
+                const typeIcon = docType === 'quotation' ? '📋' : '📦';
+                const typeDisplay = docType.charAt(0).toUpperCase() + docType.slice(1);
+                
+                // Truncate long names for better display
+                const truncatedName = docName.length > 35 ? docName.substring(0, 32) + '...' : docName;
+                const truncatedCustomer = customerName.length > 25 ? customerName.substring(0, 22) + '...' : customerName;
+                
+                return `
+                    <div class="document-item">
+                        <div class="document-info">
+                            <div class="document-header">
+                                <h4 class="document-title" title="${docName}">
+                                    ${typeIcon} ${truncatedName}
+                                </h4>
+                                <span class="document-date">${docDate}</span>
+                            </div>
+                            <div class="document-details">
+                                <span class="customer-name" title="${customerName}">Customer: ${truncatedCustomer}</span>
+                                ${totalDisplay}
+                                <span class="document-type">${typeDisplay}</span>
+                            </div>
+                        </div>
+                        <div class="document-actions">
+                            <button class="doc-btn view-btn" onclick="viewDocument('${docId}')" title="View PDF in browser">
+                                👁️ View
+                            </button>
+                            <button class="doc-btn download-btn" onclick="downloadDocument('${docId}')" title="Download PDF file">
+                                📥 Download
+                            </button>
+                            <button class="doc-btn delete-btn" onclick="deleteDocument('${docId}')" title="Delete document permanently">
+                                🗑️ Delete
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            documentsList.innerHTML = documentsHTML;
+        }
+
+        async function searchDocuments() {
+            const searchTerm = document.getElementById('documentSearch').value.trim();
+            const docType = document.getElementById('documentTypeFilter').value;
+            
+            const documentsList = document.getElementById('documentsList');
+            
+            // Show loading state
+            documentsList.innerHTML = '<div class="loading-documents">🔍 Searching documents...</div>';
+
+            try {
+                const params = new URLSearchParams();
+                if (searchTerm) params.append('search', searchTerm);
+                if (docType) params.append('type', docType);
+
+                const response = await fetch(`/documents?${params}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+
+                if (data.success) {
+                    displayDocuments(data.documents);
+                    
+                    // Show search results feedback
+                    const resultCount = data.documents.length;
+                    if (searchTerm || docType) {
+                        const searchInfo = searchTerm ? `"${searchTerm}"` : 'all documents';
+                        const typeInfo = docType ? ` (${docType}s only)` : '';
+                        showToast(`Found ${resultCount} result${resultCount === 1 ? '' : 's'} for ${searchInfo}${typeInfo}`, 'info');
+                    }
+                } else {
+                    documentsList.innerHTML = `
+                        <div class="error-message">
+                            Search failed<br>
+                            <small>${data.message || 'Unknown error occurred'}</small>
+                        </div>
+                    `;
+                    showToast(`Search failed: ${data.message || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Error searching documents:', error);
+                documentsList.innerHTML = `
+                    <div class="error-message">
+                        Search error<br>
+                        <small>Please check your connection and try again</small>
+                        <br><br>
+                        <button class="doc-btn view-btn" onclick="loadDocuments()" style="margin-top: 10px;">
+                            📄 Show All Documents
+                        </button>
+                    </div>
+                `;
+                showToast('Search error. Please try again.', 'error');
+            }
+        }
+
+        function filterDocuments() {
+            searchDocuments(); // Use the same function for filtering
+        }
+
+        function viewDocument(docId) {
+            // Add loading state
+            showToast('Opening document...', 'info');
+            
+            // Open in new tab with error handling
+            const viewUrl = `/documents/${docId}`;
+            const newWindow = window.open(viewUrl, '_blank');
+            
+            // Check if popup was blocked
+            if (!newWindow || newWindow.closed || typeof newWindow.closed == 'undefined') {
+                showToast('Popup blocked. Please allow popups or try downloading instead.', 'error');
+                // Fallback to download
+                downloadDocument(docId);
+            }
+        }
+
+        function downloadDocument(docId) {
+            // Add loading state
+            showToast('Preparing download...', 'info');
+            
+            // Create a temporary link for download
+            const downloadUrl = `/documents/${docId}/download`;
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            
+            // Trigger download
+            link.click();
+            
+            // Cleanup
+            setTimeout(() => {
+                document.body.removeChild(link);
+                showToast('Download started', 'success');
+            }, 100);
+        }
+
+        async function deleteDocument(docId) {
+            // Get document name for better confirmation
+            const documentItem = event.target.closest('.document-item');
+            const documentName = documentItem ? documentItem.querySelector('.document-title').textContent.trim() : 'this document';
+            
+            if (!confirm(`Are you sure you want to delete "${documentName}"?\n\nThis action cannot be undone.`)) {
+                return;
+            }
+
+            // Show loading state
+            showToast('Deleting document...', 'info');
+            
+            // Disable the delete button to prevent double-clicks
+            const deleteBtn = event.target;
+            deleteBtn.disabled = true;
+            deleteBtn.innerHTML = '⏳ Deleting...';
+
+            try {
+                const response = await fetch(`/documents/${docId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showToast('Document deleted successfully', 'success');
+                    await loadDocuments(); // Reload the list
+                } else {
+                    showToast(`Failed to delete document: ${data.message || 'Unknown error'}`, 'error');
+                    // Re-enable button on failure
+                    deleteBtn.disabled = false;
+                    deleteBtn.innerHTML = '🗑️ Delete';
+                }
+            } catch (error) {
+                console.error('Error deleting document:', error);
+                showToast('Error deleting document. Please try again.', 'error');
+                // Re-enable button on error
+                deleteBtn.disabled = false;
+                deleteBtn.innerHTML = '🗑️ Delete';
+            }
+        }
+
+        // Add search on Enter key
+        document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('documentSearch');
+            if (searchInput) {
+                searchInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        searchDocuments();
+                    }
+                });
+            }
+        });
 
         // Prevent form submission on Enter in quick actions
         document.addEventListener('keydown', function(e) {

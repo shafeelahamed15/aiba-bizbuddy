@@ -32,6 +32,8 @@ class FirestoreService:
         self.QUOTATIONS_COLLECTION = 'quotations'
         self.PURCHASE_ORDERS_COLLECTION = 'purchase_orders'
         self.BUSINESS_PROFILES_COLLECTION = 'business_profiles'
+        self.DOCUMENTS_COLLECTION = 'user_documents'
+        self.DOCUMENTS_CONTENT_COLLECTION = 'document_content'
     
     # ========================================
     # USER MANAGEMENT
@@ -386,6 +388,201 @@ class FirestoreService:
             return False
     
     # ========================================
+    # DOCUMENT MANAGEMENT
+    # ========================================
+    
+    def save_document(self, user_id: str, document_data: Dict, pdf_content: bytes = None) -> str:
+        """Save a PDF document to Firestore with improved structure."""
+        try:
+            # Generate a unique document ID with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            doc_type_prefix = document_data.get('document_type', 'doc')[:3].upper()
+            doc_id = f"{user_id}_{doc_type_prefix}_{timestamp}_{firestore.SERVER_TIMESTAMP}"
+            
+            # Use the generated ID as document ID for better organization
+            doc_ref = self.db.collection(self.DOCUMENTS_COLLECTION).document()
+            actual_doc_id = doc_ref.id  # Firestore auto-generated ID
+            
+            # Prepare document metadata with proper structure
+            metadata = {
+                'document_id': actual_doc_id,
+                'user_id': user_id,
+                'document_type': document_data.get('document_type', 'unknown'),
+                'document_name': document_data.get('document_name', 'Untitled'),
+                'document_number': document_data.get('document_number', ''),
+                'customer_name': document_data.get('customer_name', ''),
+                'customer_address': document_data.get('customer_address', ''),
+                'customer_email': document_data.get('customer_email', ''),
+                'customer_gstin': document_data.get('customer_gstin', ''),
+                'quote_number': document_data.get('quote_number', ''),
+                'po_number': document_data.get('po_number', ''),
+                'grand_total': document_data.get('grand_total', 0),
+                'items_count': document_data.get('items_count', 0),
+                'items_summary': document_data.get('items_summary', ''),
+                'file_path': document_data.get('file_path', ''),
+                'file_size': len(pdf_content) if pdf_content else 0,
+                'creation_source': document_data.get('creation_source', 'aiba'),
+                'status': 'active',
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'updated_at': firestore.SERVER_TIMESTAMP
+            }
+            
+            # Save metadata to main documents collection
+            doc_ref.set(metadata)
+            
+            # Save PDF content separately for better performance
+            if pdf_content:
+                import base64
+                pdf_b64 = base64.b64encode(pdf_content).decode('utf-8')
+                content_ref = self.db.collection(self.DOCUMENTS_CONTENT_COLLECTION).document(actual_doc_id)
+                content_ref.set({
+                    'document_id': actual_doc_id,
+                    'user_id': user_id,  # Add user_id for security
+                    'content': pdf_b64,
+                    'content_type': 'application/pdf',
+                    'encoding': 'base64',
+                    'created_at': firestore.SERVER_TIMESTAMP
+                })
+            
+            return actual_doc_id
+            
+        except Exception as e:
+            print(f"Error saving document to Firestore: {e}")
+            return None
+    
+    def get_document(self, doc_id: str) -> Optional[Dict]:
+        """Get document metadata by ID."""
+        try:
+            doc_ref = self.db.collection(self.DOCUMENTS_COLLECTION).document(doc_id)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else None
+        except Exception as e:
+            print(f"Error getting document: {e}")
+            return None
+    
+    def get_document_content(self, doc_id: str) -> Optional[bytes]:
+        """Get PDF content by document ID."""
+        try:
+            content_ref = self.db.collection(self.DOCUMENTS_CONTENT_COLLECTION).document(doc_id)
+            doc = content_ref.get()
+            if doc.exists:
+                import base64
+                content_data = doc.to_dict()
+                pdf_b64 = content_data.get('content', '')
+                return base64.b64decode(pdf_b64) if pdf_b64 else None
+            return None
+        except Exception as e:
+            print(f"Error getting document content: {e}")
+            return None
+    
+    def get_user_documents(self, user_id: str, limit: int = 50) -> List[Dict]:
+        """Get all documents for a user."""
+        try:
+            docs_ref = self.db.collection(self.DOCUMENTS_COLLECTION)
+            
+            # Simplified query to avoid index requirement - filter by user_id only
+            query = docs_ref.where('user_id', '==', user_id).limit(limit * 2)  # Get more to filter locally
+            docs = query.stream()
+            
+            documents = []
+            for doc in docs:
+                doc_data = doc.to_dict()
+                
+                # Filter out deleted documents locally
+                if doc_data.get('status') != 'active':
+                    continue
+                
+                # Convert timestamp to string for JSON serialization
+                if 'created_at' in doc_data and doc_data['created_at']:
+                    try:
+                        doc_data['created_at_str'] = doc_data['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        doc_data['created_at_str'] = 'Unknown date'
+                else:
+                    doc_data['created_at_str'] = 'Unknown date'
+                    
+                documents.append(doc_data)
+                
+                # Stop when we have enough documents
+                if len(documents) >= limit:
+                    break
+            
+            # Sort by created_at locally (newest first)
+            documents.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+            
+            return documents
+            
+        except Exception as e:
+            print(f"Error getting user documents: {e}")
+            return []
+    
+    def delete_document(self, doc_id: str, user_id: str) -> bool:
+        """Soft delete a document (mark as deleted)."""
+        try:
+            # Verify ownership
+            doc_ref = self.db.collection(self.DOCUMENTS_COLLECTION).document(doc_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return False
+            
+            doc_data = doc.to_dict()
+            if doc_data.get('user_id') != user_id:
+                return False  # User doesn't own this document
+            
+            # Soft delete
+            doc_ref.update({
+                'status': 'deleted',
+                'deleted_at': firestore.SERVER_TIMESTAMP,
+                'updated_at': firestore.SERVER_TIMESTAMP
+            })
+            return True
+        except Exception as e:
+            print(f"Error deleting document: {e}")
+            return False
+    
+    def search_user_documents(self, user_id: str, search_term: str, doc_type: str = None) -> List[Dict]:
+        """Search user documents by name or customer."""
+        try:
+            docs_ref = self.db.collection(self.DOCUMENTS_COLLECTION)
+            # Simple query to avoid index requirements
+            query = docs_ref.where('user_id', '==', user_id)
+            
+            docs = query.stream()
+            
+            results = []
+            search_lower = search_term.lower()
+            for doc in docs:
+                data = doc.to_dict()
+                
+                # Filter out deleted documents
+                if data.get('status') != 'active':
+                    continue
+                
+                # Filter by document type if specified
+                if doc_type and data.get('document_type') != doc_type:
+                    continue
+                
+                # Search in document name, customer name, or quote/PO number
+                searchable_text = f"{data.get('document_name', '')} {data.get('customer_name', '')} {data.get('quote_number', '')} {data.get('po_number', '')}".lower()
+                if search_lower in searchable_text:
+                    if 'created_at' in data and data['created_at']:
+                        try:
+                            data['created_at_str'] = data['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+                        except:
+                            data['created_at_str'] = 'Unknown date'
+                    else:
+                        data['created_at_str'] = 'Unknown date'
+                    results.append(data)
+            
+            # Sort by created_at (newest first)
+            results.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+            
+            return results
+        except Exception as e:
+            print(f"Error searching documents: {e}")
+            return []
+
+    # ========================================
     # ANALYTICS & REPORTING
     # ========================================
     
@@ -396,6 +593,7 @@ class FirestoreService:
                 'total_quotations': 0,
                 'total_purchase_orders': 0,
                 'total_customers': 0,
+                'total_documents': 0,
                 'active_sessions': 0
             }
             
@@ -413,6 +611,11 @@ class FirestoreService:
             customers_ref = self.db.collection(self.CUSTOMERS_COLLECTION)
             customers_query = customers_ref.where('user_id', '==', user_id)
             stats['total_customers'] = len(list(customers_query.stream()))
+            
+            # Count documents
+            docs_ref = self.db.collection(self.DOCUMENTS_COLLECTION)
+            docs_query = docs_ref.where('user_id', '==', user_id).where('status', '==', 'active')
+            stats['total_documents'] = len(list(docs_query.stream()))
             
             return stats
         except Exception as e:

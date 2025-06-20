@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Purchase Order - {{ buyer.name }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 30px;
+            font-size: 12px;
+            color: #000;
+            line-height: 1.4;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #38a169;
+            padding-bottom: 20px;
+        }
+        
+        .company-name {
+            font-size: 24px;
+            font-weight: bold;
+            color: #38a169;
+            margin-bottom: 8px;
+        }
+        
+        .company-tagline {
+            font-size: 14px;
+            color: #718096;
+            margin-bottom: 15px;
+        }
+        
+        .company-details {
+            font-size: 12px;
+            color: #4a5568;
+        }
+        
+        h1 {
+            text-align: center;
+            font-size: 20px;
+            margin: 30px 0 20px 0;
+            color: #2d3748;
+            background: linear-gradient(135deg, #f0fff4 0%, #e6fffa 100%);
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        .document-meta {
+            float: right;
+            text-align: right;
+            margin-bottom: 20px;
+            background: #f0fff4;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #38a169;
+        }
+        
+        .info-block {
+            display: table;
+            width: 100%;
+            margin: 20px 0;
+        }
+        
+        .info {
+            display: table-cell;
+            width: 48%;
+            vertical-align: top;
+            background: #f0fff4;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #38a169;
+        }
+        
+        .info + .info {
+            margin-left: 4%;
+        }
+        
+        .info strong {
+            color: #2d3748;
+            font-size: 14px;
+        }
+        
+        .supplier-name {
+            font-size: 16px;
+            font-weight: bold;
+            color: #1a202c;
+            margin: 8px 0;
+        }
+        
+        .section-title {
+            font-size: 16px;
+            font-weight: bold;
+            color: #2d3748;
+            margin: 30px 0 15px 0;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        th {
+            background: linear-gradient(135deg, #38a169 0%, #2f855a 100%);
+            color: white;
+            padding: 15px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 11px;
+        }
+        
+        tr:nth-child(even) {
+            background-color: #f0fff4;
+        }
+        
+        tr:hover {
+            background-color: #e6fffa;
+        }
+        
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        
+        .summary-table {
+            width: 350px;
+            float: right;
+            margin-top: 20px;
+            background: #f0fff4;
+            border-radius: 8px;
+            border: 1px solid #c6f6d5;
+        }
+        
+        .summary-table td {
+            padding: 10px 15px;
+            border: none;
+            border-bottom: 1px solid #c6f6d5;
+        }
+        
+        .summary-table tr:last-child {
+            background: linear-gradient(135deg, #38a169 0%, #2f855a 100%);
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .summary-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .terms {
+            clear: both;
+            margin-top: 40px;
+            background: #f7fafc;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #4a5568;
+        }
+        
+        .terms strong {
+            color: #2d3748;
+            font-size: 14px;
+            margin-bottom: 10px;
+            display: block;
+        }
+        
+        .terms-list {
+            margin: 0;
+            padding-left: 0;
+            list-style: none;
+        }
+        
+        .terms-list li {
+            margin: 6px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .terms-list li:before {
+            content: "📋";
+            position: absolute;
+            left: 0;
+        }
+        
+        .delivery-info {
+            margin-top: 30px;
+            padding: 20px;
+            background: #fef5e7;
+            border-radius: 8px;
+            border-left: 4px solid #d69e2e;
+        }
+        
+        .delivery-info strong {
+            color: #2d3748;
+            font-size: 12px;
+        }
+        
+        .signatory {
+            margin-top: 40px;
+            text-align: right;
+            font-size: 12px;
+        }
+        
+        .signature-line {
+            border-top: 2px solid #2d3748;
+            width: 200px;
+            margin: 50px 0 8px auto;
+        }
+        
+        .clearfix {
+            clear: both;
+        }
+        
+        .urgent-notice {
+            background: #fed7d7;
+            border-left: 4px solid #e53e3e;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        
+        /* Print optimization */
+        @media print {
+            body { -webkit-print-color-adjust: exact !important; }
+            .info-block { page-break-inside: avoid; }
+            table { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div class="company-name">{{ buyer.name }}</div>
+        <div class="company-tagline">Professional Steel Procurement & Supply Chain</div>
+        <div class="company-details">
+            📍 {{ buyer.address }}<br>
+            ✉️ {{ buyer.email }} | 🏛️ GST: {{ buyer.gstin }}
+        </div>
+    </div>
+
+    <div class="document-meta">
+        <strong>PO #:</strong> {{ order.po_number }}<br>
+        <strong>Date:</strong> {{ order.date }}<br>
+        <strong>Delivery Required:</strong> {{ order.delivery_date }}
+    </div>
+
+    <h1>PURCHASE ORDER</h1>
+
+    <div class="info-block">
+        <div class="info">
+            <strong>Supplier Details:</strong><br>
+            <div class="supplier-name">{{ seller.name }}</div>
+            {{ seller.address }}<br><br>
+            <strong>Email:</strong> {{ seller.email }}<br>
+            <strong>GST:</strong> {{ seller.gstin }}
+        </div>
+    </div>
+
+    <div class="clearfix"></div>
+
+    {% if order.urgent %}
+    <div class="urgent-notice">
+        <strong>⚠️ URGENT ORDER:</strong> This is a priority purchase order. Please confirm receipt immediately and provide delivery timeline.
+    </div>
+    {% endif %}
+
+    <div class="section-title">Steel Materials Required</div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th class="text-center">S.No</th>
+                <th>Material Specification</th>
+                <th class="text-center">Quantity Required</th>
+                <th class="text-right">Unit Rate</th>
+                <th class="text-right">Total Amount</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr>
+                <td class="text-center">{{ loop.index }}</td>
+                <td>{{ item.description }}</td>
+                                 <td class="text-center">{{ item.qty|round(2) }} kg</td>
+                 <td class="text-right">₹{{ item.rate|round(2) }}</td>
+                 <td class="text-right">₹{{ item.amount|int }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <table class="summary-table">
+        <tr>
+            <td><strong>Subtotal:</strong></td>
+            <td class="text-right">₹{{ summary.subtotal|round(2) }}</td>
+        </tr>
+        <tr>
+            <td><strong>GST ({{ summary.gst_rate }}%):</strong></td>
+            <td class="text-right">₹{{ summary.gst|round(2) }}</td>
+        </tr>
+        <tr>
+            <td><strong>Order Total:</strong></td>
+            <td class="text-right">₹{{ summary.grand_total|round(2) }}</td>
+        </tr>
+    </table>
+
+    <div class="delivery-info">
+        <strong>Delivery Instructions:</strong><br>
+        <strong>Delivery Address:</strong> {{ delivery.address }}<br>
+        <strong>Contact Person:</strong> {{ delivery.contact_person }}<br>
+        <strong>Phone:</strong> {{ delivery.phone }}<br>
+        <strong>Delivery Date:</strong> {{ order.delivery_date }}<br>
+        <strong>Special Instructions:</strong> {{ delivery.instructions }}
+    </div>
+
+    <div class="terms">
+        <strong>Purchase Terms & Conditions</strong>
+        <ul class="terms-list">
+            {% for condition in terms %}
+            <li>{{ condition }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="signatory">
+        <div class="signature-line"></div>
+        <strong>Purchase Manager</strong><br>
+        <em>{{ buyer.name }}</em><br>
+        <strong>Date:</strong> {{ order.date }}
+    </div>
+
+</body>
+</html> 

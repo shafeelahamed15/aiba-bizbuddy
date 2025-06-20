@@ -7,146 +7,193 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='settings.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body>
-    <div class="settings-container">
-        <!-- Header -->
-        <div class="settings-header">
-            <div class="header-content">
-                <div class="header-left">
-                    <h1 class="settings-title">⚙️ Settings</h1>
-                    <p class="settings-subtitle">Manage your business profile and preferences</p>
+<body class="grok-settings-body">
+    <!-- Background Elements -->
+    <div class="bg-gradient"></div>
+    <div class="bg-grid"></div>
+    <div class="floating-elements">
+        <div class="floating-element" style="--x: 10%; --y: 20%; --delay: 0s;"></div>
+        <div class="floating-element" style="--x: 80%; --y: 30%; --delay: 2s;"></div>
+        <div class="floating-element" style="--x: 60%; --y: 70%; --delay: 4s;"></div>
+        <div class="floating-element" style="--x: 20%; --y: 80%; --delay: 1s;"></div>
+        <div class="floating-element" style="--x: 90%; --y: 60%; --delay: 3s;"></div>
+    </div>
+
+    <div class="grok-settings-container">
+        <!-- Header Section -->
+        <div class="grok-settings-header">
+            <div class="settings-brand">
+                <div class="brand-icon">⚙️</div>
+                <div class="brand-text">
+                    <h1>AIBA Settings</h1>
+                    <p>Configure your AI Business Assistant</p>
                 </div>
-                <div class="header-actions">
-                    <a href="/" class="btn btn-secondary">
-                        ← Back to Chat
-                    </a>
-                    <button class="btn btn-outline" onclick="logout()">
-                        🚪 Logout
-                    </button>
-                </div>
+            </div>
+            
+            <div class="header-actions">
+                <a href="/" class="grok-secondary-btn">
+                    <span class="btn-icon">←</span>
+                    Back to Chat
+                </a>
+                <button class="grok-outline-btn" onclick="logout()">
+                    <span class="btn-icon">🚪</span>
+                    Logout
+                </button>
             </div>
         </div>
 
-        <!-- Main Content -->
-        <div class="settings-content">
-            <!-- Navigation Tabs -->
-            <div class="settings-nav">
-                <button class="nav-tab active" onclick="showTab('business')" id="businessTab">
-                    🏢 Business Information
+        <!-- Navigation Tabs -->
+        <div class="grok-tabs-container">
+            <div class="grok-tabs">
+                <button class="grok-tab active" onclick="showTab('business')" id="businessTab">
+                    <span class="tab-icon">🏢</span>
+                    <span class="tab-text">Business Info</span>
                 </button>
-                <button class="nav-tab" onclick="showTab('bank')" id="bankTab">
-                    🏦 Bank Details
+                <button class="grok-tab" onclick="showTab('bank')" id="bankTab">
+                    <span class="tab-icon">🏦</span>
+                    <span class="tab-text">Bank Details</span>
                 </button>
-                <button class="nav-tab" onclick="showTab('account')" id="accountTab">
-                    👤 Account Settings
+                <button class="grok-tab" onclick="showTab('account')" id="accountTab">
+                    <span class="tab-icon">👤</span>
+                    <span class="tab-text">Account</span>
                 </button>
             </div>
+        </div>
 
+        <!-- Tab Content -->
+        <div class="grok-content-container">
             <!-- Business Information Tab -->
-            <div class="tab-content active" id="businessContent">
-                <div class="settings-card">
-                    <div class="card-header">
+            <div class="grok-tab-content active" id="businessContent">
+                <div class="grok-settings-card">
+                    <div class="grok-card-header">
                         <h2>Business Information</h2>
                         <p>This information appears on all your PDF documents</p>
                     </div>
 
-                    <form id="businessForm" onsubmit="updateBusinessInfo(event)">
-                        <div class="form-grid">
-                            <div class="form-group">
-                                <label for="businessName" class="required">Business Name</label>
-                                <input 
-                                    type="text" 
-                                    id="businessName" 
-                                    class="form-input" 
-                                    placeholder="Enter business name"
-                                    value="{{ profile.business_info.business_name if profile else '' }}"
-                                    required
-                                >
+                    <form class="grok-form" id="businessForm" onsubmit="updateBusinessInfo(event)">
+                        <div class="grok-form-grid">
+                            <div class="grok-form-group">
+                                <label class="grok-label required">Business Name</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="businessName" 
+                                        class="grok-input" 
+                                        placeholder="Enter your business name"
+                                        value="{{ profile.business_info.business_name if profile else '' }}"
+                                        required
+                                    >
+                                    <span class="input-icon">🏢</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="gstin">GSTIN</label>
-                                <input 
-                                    type="text" 
-                                    id="gstin" 
-                                    class="form-input" 
-                                    placeholder="22AAAAA0000A1Z5"
-                                    value="{{ profile.business_info.gstin if profile else '' }}"
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label">GSTIN</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="gstin" 
+                                        class="grok-input" 
+                                        placeholder="22AAAAA0000A1Z5"
+                                        value="{{ profile.business_info.gstin if profile else '' }}"
+                                    >
+                                    <span class="input-icon">🧾</span>
+                                </div>
                             </div>
 
-                            <div class="form-group full-width">
-                                <label for="address" class="required">Registered Address</label>
-                                <textarea 
-                                    id="address" 
-                                    class="form-input" 
-                                    rows="3"
-                                    placeholder="Enter complete business address"
-                                    required
-                                >{{ profile.business_info.address if profile else '' }}</textarea>
+                            <div class="grok-form-group full-width">
+                                <label class="grok-label required">Registered Address</label>
+                                <div class="grok-input-wrapper">
+                                    <textarea 
+                                        id="address" 
+                                        class="grok-input grok-textarea" 
+                                        rows="3"
+                                        placeholder="Enter complete business address"
+                                        required
+                                    >{{ profile.business_info.address if profile else '' }}</textarea>
+                                    <span class="input-icon">📍</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="state">State</label>
-                                <input 
-                                    type="text" 
-                                    id="state" 
-                                    class="form-input" 
-                                    placeholder="e.g., Maharashtra"
-                                    value="{{ profile.business_info.state if profile else '' }}"
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label">State</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="state" 
+                                        class="grok-input" 
+                                        placeholder="e.g., Maharashtra"
+                                        value="{{ profile.business_info.state if profile else '' }}"
+                                    >
+                                    <span class="input-icon">🗺️</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="pincode">Pincode</label>
-                                <input 
-                                    type="text" 
-                                    id="pincode" 
-                                    class="form-input" 
-                                    placeholder="400001"
-                                    value="{{ profile.business_info.pincode if profile else '' }}"
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label">Pincode</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="pincode" 
+                                        class="grok-input" 
+                                        placeholder="400001"
+                                        value="{{ profile.business_info.pincode if profile else '' }}"
+                                    >
+                                    <span class="input-icon">📮</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="email" class="required">Business Email</label>
-                                <input 
-                                    type="email" 
-                                    id="email" 
-                                    class="form-input" 
-                                    placeholder="business@example.com"
-                                    value="{{ profile.business_info.email if profile else '' }}"
-                                    required
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label required">Business Email</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="email" 
+                                        id="email" 
+                                        class="grok-input" 
+                                        placeholder="business@example.com"
+                                        value="{{ profile.business_info.email if profile else '' }}"
+                                        required
+                                    >
+                                    <span class="input-icon">📧</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="phone" class="required">Phone Number</label>
-                                <input 
-                                    type="tel" 
-                                    id="phone" 
-                                    class="form-input" 
-                                    placeholder="+91 98765 43210"
-                                    value="{{ profile.business_info.phone if profile else '' }}"
-                                    required
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label required">Phone Number</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="tel" 
+                                        id="phone" 
+                                        class="grok-input" 
+                                        placeholder="+91 98765 43210"
+                                        value="{{ profile.business_info.phone if profile else '' }}"
+                                        required
+                                    >
+                                    <span class="input-icon">📱</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="website">Website</label>
-                                <input 
-                                    type="url" 
-                                    id="website" 
-                                    class="form-input" 
-                                    placeholder="www.yourbusiness.com"
-                                    value="{{ profile.business_info.website if profile else '' }}"
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label">Website</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="url" 
+                                        id="website" 
+                                        class="grok-input" 
+                                        placeholder="www.yourbusiness.com"
+                                        value="{{ profile.business_info.website if profile else '' }}"
+                                    >
+                                    <span class="input-icon">🌐</span>
+                                </div>
                             </div>
                         </div>
 
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary" id="businessSaveBtn">
-                                <span class="btn-text">💾 Save Changes</span>
+                        <div class="grok-form-actions">
+                            <button type="submit" class="grok-primary-btn" id="businessSaveBtn">
+                                <span class="btn-text">
+                                    <span class="btn-icon">💾</span>
+                                    Save Changes
+                                </span>
                                 <span class="btn-loader" style="display: none;">
                                     <div class="spinner"></div>
                                     Saving...
@@ -158,78 +205,96 @@
             </div>
 
             <!-- Bank Details Tab -->
-            <div class="tab-content" id="bankContent">
-                <div class="settings-card">
-                    <div class="card-header">
+            <div class="grok-tab-content" id="bankContent">
+                <div class="grok-settings-card">
+                    <div class="grok-card-header">
                         <h2>Bank Details</h2>
                         <p>Banking information for payment details in documents</p>
                     </div>
 
-                    <form id="bankForm" onsubmit="updateBankInfo(event)">
-                        <div class="form-grid">
-                            <div class="form-group">
-                                <label for="accountName" class="required">Account Holder Name</label>
-                                <input 
-                                    type="text" 
-                                    id="accountName" 
-                                    class="form-input" 
-                                    placeholder="Account holder name"
-                                    value="{{ profile.bank_info.account_name if profile else '' }}"
-                                    required
-                                >
+                    <form class="grok-form" id="bankForm" onsubmit="updateBankInfo(event)">
+                        <div class="grok-form-grid">
+                            <div class="grok-form-group">
+                                <label class="grok-label required">Account Holder Name</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="accountName" 
+                                        class="grok-input" 
+                                        placeholder="Account holder name"
+                                        value="{{ profile.bank_info.account_name if profile else '' }}"
+                                        required
+                                    >
+                                    <span class="input-icon">👤</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="accountNumber" class="required">Account Number</label>
-                                <input 
-                                    type="text" 
-                                    id="accountNumber" 
-                                    class="form-input" 
-                                    placeholder="123456789012"
-                                    value="{{ profile.bank_info.account_number if profile else '' }}"
-                                    required
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label required">Account Number</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="accountNumber" 
+                                        class="grok-input" 
+                                        placeholder="123456789012"
+                                        value="{{ profile.bank_info.account_number if profile else '' }}"
+                                        required
+                                    >
+                                    <span class="input-icon">🔢</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="bankName" class="required">Bank Name</label>
-                                <input 
-                                    type="text" 
-                                    id="bankName" 
-                                    class="form-input" 
-                                    placeholder="State Bank of India"
-                                    value="{{ profile.bank_info.bank_name if profile else '' }}"
-                                    required
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label required">Bank Name</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="bankName" 
+                                        class="grok-input" 
+                                        placeholder="State Bank of India"
+                                        value="{{ profile.bank_info.bank_name if profile else '' }}"
+                                        required
+                                    >
+                                    <span class="input-icon">🏦</span>
+                                </div>
                             </div>
 
-                            <div class="form-group">
-                                <label for="ifscCode" class="required">IFSC Code</label>
-                                <input 
-                                    type="text" 
-                                    id="ifscCode" 
-                                    class="form-input" 
-                                    placeholder="SBIN0001234"
-                                    value="{{ profile.bank_info.ifsc_code if profile else '' }}"
-                                    required
-                                >
+                            <div class="grok-form-group">
+                                <label class="grok-label required">IFSC Code</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="ifscCode" 
+                                        class="grok-input" 
+                                        placeholder="SBIN0001234"
+                                        value="{{ profile.bank_info.ifsc_code if profile else '' }}"
+                                        required
+                                    >
+                                    <span class="input-icon">🏛️</span>
+                                </div>
                             </div>
 
-                            <div class="form-group full-width">
-                                <label for="branch">Branch Name</label>
-                                <input 
-                                    type="text" 
-                                    id="branch" 
-                                    class="form-input" 
-                                    placeholder="Mumbai Main Branch"
-                                    value="{{ profile.bank_info.branch if profile else '' }}"
-                                >
+                            <div class="grok-form-group full-width">
+                                <label class="grok-label">Branch Name</label>
+                                <div class="grok-input-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="branch" 
+                                        class="grok-input" 
+                                        placeholder="Mumbai Main Branch"
+                                        value="{{ profile.bank_info.branch if profile else '' }}"
+                                    >
+                                    <span class="input-icon">🏢</span>
+                                </div>
                             </div>
                         </div>
 
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary" id="bankSaveBtn">
-                                <span class="btn-text">💾 Save Changes</span>
+                        <div class="grok-form-actions">
+                            <button type="submit" class="grok-primary-btn" id="bankSaveBtn">
+                                <span class="btn-text">
+                                    <span class="btn-icon">💾</span>
+                                    Save Changes
+                                </span>
                                 <span class="btn-loader" style="display: none;">
                                     <div class="spinner"></div>
                                     Saving...
@@ -241,52 +306,76 @@
             </div>
 
             <!-- Account Settings Tab -->
-            <div class="tab-content" id="accountContent">
-                <div class="settings-card">
-                    <div class="card-header">
+            <div class="grok-tab-content" id="accountContent">
+                <div class="grok-settings-card">
+                    <div class="grok-card-header">
                         <h2>Account Settings</h2>
                         <p>Manage your account preferences and security</p>
                     </div>
 
-                    <div class="account-section">
+                    <!-- Usage Statistics -->
+                    <div class="grok-stats-section">
                         <h3>📊 Usage Statistics</h3>
-                        <div class="stats-grid">
-                            <div class="stat-card">
-                                <div class="stat-value">-</div>
-                                <div class="stat-label">PDFs Generated</div>
+                        <div class="grok-stats-grid">
+                            <div class="grok-stat-card">
+                                <div class="stat-icon">📄</div>
+                                <div class="stat-content">
+                                    <div class="stat-value">-</div>
+                                    <div class="stat-label">PDFs Generated</div>
+                                </div>
                             </div>
-                            <div class="stat-card">
-                                <div class="stat-value">-</div>
-                                <div class="stat-label">Documents Created</div>
+                            <div class="grok-stat-card">
+                                <div class="stat-icon">📋</div>
+                                <div class="stat-content">
+                                    <div class="stat-value">-</div>
+                                    <div class="stat-label">Documents Created</div>
+                                </div>
                             </div>
-                            <div class="stat-card">
-                                <div class="stat-value">-</div>
-                                <div class="stat-label">Active Since</div>
+                            <div class="grok-stat-card">
+                                <div class="stat-icon">📅</div>
+                                <div class="stat-content">
+                                    <div class="stat-value">-</div>
+                                    <div class="stat-label">Active Since</div>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="account-section">
-                        <h3>🔐 Security</h3>
-                        <div class="security-actions">
-                            <button class="btn btn-outline" onclick="changePassword()">
-                                🔑 Change Password
-                            </button>
-                            <button class="btn btn-outline" onclick="downloadData()">
-                                📁 Download My Data
-                            </button>
+                    <!-- Security Section -->
+                    <div class="grok-security-section">
+                        <h3>🔐 Security & Privacy</h3>
+                        <div class="grok-action-cards">
+                            <div class="grok-action-card" onclick="changePassword()">
+                                <div class="action-icon">🔑</div>
+                                <div class="action-content">
+                                    <h4>Change Password</h4>
+                                    <p>Update your account password</p>
+                                </div>
+                                <div class="action-arrow">→</div>
+                            </div>
+                            <div class="grok-action-card" onclick="downloadData()">
+                                <div class="action-icon">📁</div>
+                                <div class="action-content">
+                                    <h4>Download Data</h4>
+                                    <p>Export your account data</p>
+                                </div>
+                                <div class="action-arrow">→</div>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="account-section danger-zone">
+                    <!-- Danger Zone -->
+                    <div class="grok-danger-section">
                         <h3>⚠️ Danger Zone</h3>
-                        <p>These actions cannot be undone</p>
-                        <div class="danger-actions">
-                            <button class="btn btn-danger" onclick="clearAllData()">
-                                🗑️ Clear All Data
+                        <p class="danger-warning">These actions cannot be undone</p>
+                        <div class="grok-danger-actions">
+                            <button class="grok-danger-btn" onclick="clearAllData()">
+                                <span class="btn-icon">🗑️</span>
+                                Clear All Data
                             </button>
-                            <button class="btn btn-danger" onclick="deleteAccount()">
-                                ❌ Delete Account
+                            <button class="grok-danger-btn critical" onclick="deleteAccount()">
+                                <span class="btn-icon">❌</span>
+                                Delete Account
                             </button>
                         </div>
                     </div>
@@ -294,22 +383,75 @@
             </div>
         </div>
 
-        <!-- Success Message -->
-        <div class="message-container" id="messageContainer" style="display: none;">
-            <div class="message" id="messageContent"></div>
+        <!-- Success/Error Messages -->
+        <div class="grok-message-container" id="messageContainer" style="display: none;">
+            <div class="grok-message" id="messageContent"></div>
         </div>
     </div>
 
     <script>
-        // Tab switching
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            document.body.classList.add('loaded');
+            setupInputFocus();
+            setupAutoFormat();
+        });
+
+        // Tab switching with smooth animations
         function showTab(tab) {
             // Update nav tabs
-            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.grok-tab').forEach(t => t.classList.remove('active'));
             document.getElementById(tab + 'Tab').classList.add('active');
 
-            // Update content
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            document.getElementById(tab + 'Content').classList.add('active');
+            // Update content with fade effect
+            document.querySelectorAll('.grok-tab-content').forEach(c => {
+                c.classList.remove('active');
+                c.style.opacity = '0';
+            });
+            
+            setTimeout(() => {
+                const activeContent = document.getElementById(tab + 'Content');
+                activeContent.classList.add('active');
+                activeContent.style.opacity = '1';
+            }, 150);
+        }
+
+        // Input focus effects
+        function setupInputFocus() {
+            document.querySelectorAll('.grok-input').forEach(input => {
+                input.addEventListener('focus', function() {
+                    this.parentElement.classList.add('focused');
+                });
+                
+                input.addEventListener('blur', function() {
+                    this.parentElement.classList.remove('focused');
+                });
+            });
+        }
+
+        // Auto-format inputs
+        function setupAutoFormat() {
+            const gstinInput = document.getElementById('gstin');
+            const ifscInput = document.getElementById('ifscCode');
+            const pincodeInput = document.getElementById('pincode');
+
+            if (gstinInput) {
+                gstinInput.addEventListener('input', function(e) {
+                    e.target.value = e.target.value.toUpperCase();
+                });
+            }
+
+            if (ifscInput) {
+                ifscInput.addEventListener('input', function(e) {
+                    e.target.value = e.target.value.toUpperCase();
+                });
+            }
+
+            if (pincodeInput) {
+                pincodeInput.addEventListener('input', function(e) {
+                    e.target.value = e.target.value.replace(/\D/g, '').substring(0, 6);
+                });
+            }
         }
 
         // Update business information
@@ -344,7 +486,7 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    showMessage('Business information updated successfully!', 'success');
+                    showMessage('Business information updated successfully! ✨', 'success');
                 } else {
                     showMessage(data.message, 'error');
                 }
@@ -385,7 +527,7 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    showMessage('Bank details updated successfully!', 'success');
+                    showMessage('Bank details updated successfully! 💳', 'success');
                 } else {
                     showMessage(data.message, 'error');
                 }
@@ -409,24 +551,24 @@
             }
         }
 
-        // Placeholder functions for account actions
+        // Account action functions
         function changePassword() {
-            showMessage('Password change functionality coming soon!', 'info');
+            showMessage('Password change functionality coming soon! 🔐', 'info');
         }
 
         function downloadData() {
-            showMessage('Data export functionality coming soon!', 'info');
+            showMessage('Data export functionality coming soon! 📁', 'info');
         }
 
         function clearAllData() {
             if (confirm('Are you sure you want to clear all data? This action cannot be undone.')) {
-                showMessage('Data clearing functionality coming soon!', 'info');
+                showMessage('Data clearing functionality coming soon! 🗑️', 'info');
             }
         }
 
         function deleteAccount() {
             if (confirm('Are you sure you want to delete your account? This action cannot be undone.')) {
-                showMessage('Account deletion functionality coming soon!', 'info');
+                showMessage('Account deletion functionality coming soon! ❌', 'info');
             }
         }
 
@@ -439,10 +581,12 @@
                 text.style.display = 'none';
                 loader.style.display = 'flex';
                 btn.disabled = true;
+                btn.classList.add('loading');
             } else {
-                text.style.display = 'block';
+                text.style.display = 'flex';
                 loader.style.display = 'none';
                 btn.disabled = false;
+                btn.classList.remove('loading');
             }
         }
 
@@ -451,26 +595,20 @@
             const content = document.getElementById('messageContent');
 
             content.textContent = message;
-            container.className = `message-container ${type}`;
+            container.className = `grok-message-container ${type}`;
             container.style.display = 'block';
 
+            // Animate in
+            setTimeout(() => container.classList.add('show'), 100);
+
+            // Auto hide after 5 seconds
             setTimeout(() => {
-                container.style.display = 'none';
+                container.classList.remove('show');
+                setTimeout(() => {
+                    container.style.display = 'none';
+                }, 300);
             }, 5000);
         }
-
-        // Auto-format inputs
-        document.getElementById('gstin').addEventListener('input', function(e) {
-            e.target.value = e.target.value.toUpperCase();
-        });
-
-        document.getElementById('ifscCode').addEventListener('input', function(e) {
-            e.target.value = e.target.value.toUpperCase();
-        });
-
-        document.getElementById('pincode').addEventListener('input', function(e) {
-            e.target.value = e.target.value.replace(/\D/g, '').substring(0, 6);
-        });
     </script>
 </body>
 </html> 
