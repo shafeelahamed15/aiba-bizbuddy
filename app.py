@@ -7,13 +7,14 @@ from flask import Flask, render_template, request, jsonify, send_file, redirect,
 import os
 import json
 from datetime import datetime, timedelta
-from utils.prompt_parser import PromptParser
+# PHASE 4: REMOVED - PromptParser replaced by main.py smart flow
 from utils.simple_steel_generator import SimpleSteelPDFGenerator
 from utils.pdf_integration import AIBAPDFIntegration
 from models.memory import ChatMemory
 from auth import auth_bp, login_required, profile_required, auth_manager
 from config import Config
 from firestore_service import firestore_service
+from quote_brain import quote_brain, extract_quote_fields, detect_intent, update_quote_draft, quote_draft_state
 
 app = Flask(__name__)
 app.secret_key = Config.SECRET_KEY
@@ -28,7 +29,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.register_blueprint(auth_bp, url_prefix='/auth')
 
 # Initialize components
-prompt_parser = PromptParser()
+# PHASE 4: REMOVED - prompt_parser replaced by main.py smart flow
 chat_memory = ChatMemory()
 
 # Initialize the enhanced PDF generators (Windows compatible)
@@ -103,6 +104,26 @@ def chat():
     except Exception as e:
         return jsonify({
             'response': f'❌ Sorry, I encountered an error: {str(e)}',
+            'type': 'error'
+        })
+
+@app.route('/phase5-pdf', methods=['POST'])
+@login_required
+@profile_required
+def phase5_create_pdf():
+    """
+    Phase 5: Create PDF from finalized data endpoint
+    Direct PDF generation using the new Phase 5 logic
+    """
+    try:
+        # ✅ PHASE 5: Direct PDF generation from finalized data
+        result = generate_pdf_from_finalized_data()
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'❌ Phase 5 PDF generation error: {str(e)}',
             'type': 'error'
         })
 
@@ -359,521 +380,89 @@ def delete_document_endpoint(doc_id):
         })
 
 def process_user_message(message, chat_state, session_id):
-    """Process user message and return appropriate response."""
-    message_lower = message.lower().strip()
+    """
+    Phase 3: Ultra-simplified processing using main.py smart flow
+    Single function handles everything - ultimate simplification!
+    """
     
-    # Handle greetings and basic commands
-    if message_lower in ['hi', 'hello', 'hey', 'start']:
-        return {
-            'response': welcome_message(),
-            'type': 'welcome'
-        }
-    
-    if message_lower in ['help']:
-        return {
-            'response': help_message(),
-            'type': 'help'
-        }
-    
-    if message_lower in ['reset', 'start over', 'clear']:
-        chat_memory.clear_state(session_id)
-        return {
-            'response': '🔄 Chat cleared! How can I help you today?',
-            'type': 'system'
-        }
-    
-    # Check if we're in the middle of collecting data
-    current_flow = chat_state.get('flow_type')
-    
-    if current_flow:
-        return handle_ongoing_flow(message, chat_state, session_id)
-    else:
-        return handle_new_request(message, chat_state, session_id)
-
-def handle_new_request(message, chat_state, session_id):
-    """Handle new document creation requests."""
-    # Detect intent
-    intent = prompt_parser.detect_intent(message)
-    
-    if intent == 'quotation':
-        return start_quotation_flow(message, session_id)
-    elif intent == 'purchase_order':
-        return start_po_flow(message, session_id)
-    else:
-        return {
-            'response': general_response(message),
-            'type': 'general'
-        }
-
-def start_quotation_flow(message, session_id):
-    """🧠 STEP 1: EXTRACT FIELDS FROM PROMPT - Enhanced conversational quotation flow."""
-    # Extract data using intelligent parsing
-    extracted_data = prompt_parser.extract_quotation_data(message)
-    
-    if extracted_data and extracted_data.get('customer_name'):
-        # We got basic quotation data, now check for missing customer details
-        customer_name = extracted_data.get('customer_name')
+    try:
+        # Import the Phase 3 smart flow handler
+        from main import handle_user_input
         
-        # Initialize enhanced chat state with workflow tracking
-        chat_memory.update_state(session_id, {
-            'flow_type': 'quotation',
-            'step': 'checking_customer_details',
-            'document_data': extracted_data,
-            'original_message': message,
-            'missing_fields': [],
-            'current_field': None
-        })
+        # ✅ Let main.py handle ALL logic including PDF generation
+        # Only intercept if main.py explicitly says "ready to generate PDF"
+        response = handle_user_input(message)
         
-        # Check for missing customer details
-        missing_customer_fields = []
-        if not extracted_data.get('customer_address'):
-            missing_customer_fields.append('address')
-        if not extracted_data.get('customer_gstin'):
-            missing_customer_fields.append('gstin')
-        if not extracted_data.get('customer_email'):
-            missing_customer_fields.append('email')
-        
-        if missing_customer_fields:
-            # Ask for missing customer details
-            chat_memory.update_state(session_id, {
-                'flow_type': 'quotation',
-                'step': 'collecting_customer_details',
-                'document_data': extracted_data,
-                'missing_fields': missing_customer_fields,
-                'current_field': missing_customer_fields[0]
-            })
+        # ✅ Handle PDF generation ONLY if main.py confirms it's ready
+        message_lower = message.lower().strip()
+        if (message_lower in ['generate', 'create pdf', 'yes'] and 
+            'ready to generate pdf' in response.lower() and 
+            quote_draft_state.is_ready_for_pdf()):
             
-            # Show extracted data and ask for missing info
-            response = f"✅ **Quotation Details Extracted:**\n\n"
-            response += f"**Customer:** {customer_name}\n"
-            
-            if extracted_data.get('items'):
-                item = extracted_data['items'][0]
-                response += f"**Product:** {item.get('description', 'N/A')}\n"
-                response += f"**Quantity:** {item.get('quantity', 'N/A')} kg\n"
-                response += f"**Rate:** ₹{item.get('rate', 'N/A')}/kg\n"
-                if 'subtotal' in extracted_data:
-                    response += f"**Subtotal:** ₹{extracted_data['subtotal']:,.2f}\n"
-                    response += f"**GST @18%:** ₹{extracted_data['gst_amount']:,.2f}\n"
-                    response += f"**Grand Total:** ₹{extracted_data['grand_total']:,.2f}\n"
-            
-            response += f"\n🗣️ **To complete the quotation for {customer_name}, I need a few more details:**\n\n"
-            
-            # Ask for the first missing field
-            if 'address' in missing_customer_fields:
-                response += "📍 **What is the full address of the customer?**\n"
-                response += "*(Type 'skip' to leave blank)*"
-            
-            return {
-                'response': response,
-                'type': 'customer_details_collection',
-                'data': extracted_data,
-                'show_skip_button': True
-            }
-        else:
-            # All customer details present, check terms & conditions
-            return check_terms_and_conditions(extracted_data, session_id)
-    else:
-        # No usable data extracted, ask for basic info
-        chat_memory.update_state(session_id, {
-            'flow_type': 'quotation',
-            'step': 'collecting_basic_info',
-            'document_data': {},
-            'original_message': message
-        })
+            # ✅ Now actually generate the PDF
+            result = generate_pdf_from_finalized_data()
+            if result['success']:
+                return {
+                    'response': result['message'],
+                    'type': result['type'],
+                    'pdf_path': result.get('pdf_path'),
+                    'document_id': result.get('document_id')
+                }
+            else:
+                return {
+                    'response': result['message'],
+                    'type': result['type']
+                }
         
-        return {
-            'response': '📋 I\'ll help you create a quotation! Let me gather some information:\n\n' +
-                       '**Please provide your quotation request in natural language, for example:**\n' +
-                       '*"Quote for ABC Company - 5 MT ISMC 100x50 at ₹56/kg"*\n\n' +
-                       'Or share the customer name and items needed:',
-            'type': 'basic_collection'
-        }
-
-def check_terms_and_conditions(extracted_data, session_id):
-    """🧾 STEP 3: HANDLE MISSING TERMS & CONDITIONS"""
-    # Check if terms are missing
-    has_loading = extracted_data.get('loading_charges')
-    has_transport = extracted_data.get('transport_charges') 
-    has_payment = extracted_data.get('payment_terms')
-    
-    if not has_loading or not has_transport or not has_payment:
-        # Ask for terms & conditions
-        chat_memory.update_state(session_id, {
-            'flow_type': 'quotation',
-            'step': 'collecting_terms',
-            'document_data': extracted_data,
-            'terms_to_collect': {
-                'loading_charges': not has_loading,
-                'transport_charges': not has_transport,
-                'payment_terms': not has_payment
-            },
-            'current_term': 'loading_charges' if not has_loading else ('transport_charges' if not has_transport else 'payment_terms')
-        })
+        # Determine response type for Flask frontend
+        response_type = 'message'
+        show_skip_button = False
+        show_generate_button = False
         
-        response = "🗣️ **Would you like to enter the following Terms & Conditions?**\n"
-        response += "*(If skipped, they will be set to default: Included)*\n\n"
-        
-        if not has_loading:
-            response += "💰 **Loading Charges** (default: Included)\n"
-            response += "Please specify loading charges or click 'Use Default' for 'Included':"
+        if 'cleared' in response.lower() or 'reset' in response.lower():
+            response_type = 'reset'
+            chat_memory.clear_state(session_id)  # Also clear Flask session
+        elif 'help' in response.lower() and '**AIBA Help**' in response:
+            response_type = 'help'
+        elif 'hello' in response.lower() or 'hi' in response.lower():
+            response_type = 'welcome'
+        elif ('ready to generate pdf' in response.lower() or 
+              'quotation ready for generation' in response.lower() or
+              'ready for generation' in response.lower()):
+            response_type = 'ready_for_pdf'
+            show_generate_button = True
+        elif '*(Type \'skip\'' in response or "*(Type 'skip'" in response:
+            # Show skip button when system is asking for optional fields
+            show_skip_button = True
+            response_type = 'collecting_info'
+        elif 'missing:' in response.lower():
+            response_type = 'collecting_info'
         
         return {
             'response': response,
-            'type': 'terms_collection',
-            'data': extracted_data,
-            'show_skip_button': True,
-            'skip_button_text': 'Use Default'
+            'type': response_type,
+            'show_skip_button': show_skip_button,
+            'show_generate_button': show_generate_button
         }
-    else:
-        # All terms present, show final confirmation
-        return show_final_confirmation(extracted_data, session_id)
-
-def show_final_confirmation(extracted_data, session_id):
-    """🔁 FINAL CONFIRMATION STEP"""
-    chat_memory.update_state(session_id, {
-        'flow_type': 'quotation',
-        'step': 'final_confirmation',
-        'document_data': extracted_data
-    })
-    
-    # Format the complete quotation for confirmation
-    response = "📋 **STEP 4: QUOTATION READY FOR GENERATION**\n\n"
-    
-    # Customer details
-    response += f"**To:**\n"
-    response += f"{extracted_data.get('customer_name', 'N/A')}\n"
-    if extracted_data.get('customer_address'):
-        response += f"Address: {extracted_data['customer_address']}\n"
-    if extracted_data.get('customer_gstin'):
-        response += f"GSTIN: {extracted_data['customer_gstin']}\n"
-    if extracted_data.get('customer_email'):
-        response += f"Email: {extracted_data['customer_email']}\n"
-    
-    # Quotation table
-    response += "\n**📊 Quotation Table:**\n"
-    response += "```\n"
-    response += "S.No | Material Description    | Qty (Kg) | Rate (₹/Kg) | Amount (₹)\n"
-    response += "-----|-----------------------|----------|-------------|----------\n"
-    
-    if extracted_data.get('items'):
-        for i, item in enumerate(extracted_data['items'], 1):
-            desc = item.get('description', 'Item')
-            qty = f"{item.get('quantity', 0):,.2f}"
-            rate = f"{item.get('rate', 0):.2f}"
-            amount = f"{item.get('amount', 0):,.2f}"
-            response += f"{i:4} | {desc:21} | {qty:8} | {rate:11} | {amount:9}\n"
-    
-    response += "```\n\n"
-    
-    # Totals
-    if 'subtotal' in extracted_data:
-        response += f"**Subtotal:** ₹{extracted_data['subtotal']:,.2f}\n"
-        response += f"**GST @18%:** ₹{extracted_data['gst_amount']:,.2f}\n"
-        response += f"**Grand Total:** ₹{extracted_data['grand_total']:,.2f}\n\n"
-    
-    # Terms & Conditions
-    response += "**Terms & Conditions:**\n"
-    response += f"• Loading Charges: {extracted_data.get('loading_charges', 'Included')}\n"
-    response += f"• Transport Charges: {extracted_data.get('transport_charges', 'Included')}\n"
-    response += f"• Payment Terms: {extracted_data.get('payment_terms', 'Included')}\n\n"
-    
-    response += "**Bank Details:**\n"
-    response += "Auto-filled from AIBA memory for IGNITE INDUSTRIAL CORPORATION\n\n"
-    
-    response += "🗣️ **Shall I generate the Proforma Invoice now?**\n\n"
-    response += "✅ **Yes, Generate** - Type 'generate' or 'yes'\n"
-    response += "✏️ **Edit** - Type 'edit' to make changes\n"
-    response += "❌ **Cancel** - Type 'cancel' to start over"
-    
-    return {
-        'response': response,
-        'type': 'final_confirmation',
-        'data': extracted_data
-    }
-
-def handle_quotation_collection(message, document_data, session_id):
-    """Enhanced quotation data collection with step-by-step workflow."""
-    chat_state = chat_memory.get_state(session_id)
-    current_step = chat_state.get('step', 'collecting')
-    
-    message_lower = message.lower().strip()
-    
-    if current_step == 'collecting_basic_info':
-        # Try to extract data from the message
-        new_data = prompt_parser.extract_quotation_data(message)
-        if new_data and new_data.get('customer_name'):
-            return start_quotation_flow(message, session_id)
-        else:
-            return {
-                'response': 'I couldn\'t extract quotation details from that. Please try again with format like:\n\n' +
-                           '*"Quote for ABC Company - 5 MT ISMC 100x50 at ₹56/kg"*',
-                'type': 'basic_collection'
-            }
-    
-    elif current_step == 'collecting_customer_details':
-        return handle_customer_details_collection(message, chat_state, session_id)
-    
-    elif current_step == 'collecting_terms':
-        return handle_terms_collection(message, chat_state, session_id)
-    
-    elif current_step == 'final_confirmation':
-        return handle_final_confirmation_response(message, chat_state, session_id)
-    
-    else:
-        # Fallback to original logic
-        new_data = prompt_parser.extract_quotation_data(message)
-        if new_data:
-            for key, value in new_data.items():
-                if value:
-                    document_data[key] = value
         
-        chat_memory.update_state(session_id, {
-            'flow_type': 'quotation',
-            'step': 'collecting',
-            'document_data': document_data
-        })
-        
-        missing_fields = prompt_parser.validate_quotation_data(document_data)
-        
-        if not missing_fields:
-            return {
-                'response': format_quotation_confirmation(document_data),
-                'type': 'confirmation',
-                'data': document_data
-            }
-        else:
-            return {
-                'response': f'Great! I have some information. I still need:\n\n' +
-                           '\n'.join([f'• {field.replace("_", " ").title()}' for field in missing_fields]) +
-                           '\n\nPlease provide the missing details:',
-                'type': 'collection'
-            }
-
-def handle_customer_details_collection(message, chat_state, session_id):
-    """Handle customer details collection step by step."""
-    document_data = chat_state.get('document_data', {})
-    missing_fields = chat_state.get('missing_fields', [])
-    current_field = chat_state.get('current_field')
-    
-    message_lower = message.lower().strip()
-    
-    # Handle skip
-    if message_lower == 'skip':
-        # Skip this field (leave blank)
-        pass
-    elif message_lower in ['same as last', 'same']:
-        # TODO: Implement memory lookup for past customer data
-        pass
-    else:
-        # Store the provided value
-        if current_field == 'address':
-            document_data['customer_address'] = message.strip()
-        elif current_field == 'gstin':
-            document_data['customer_gstin'] = message.strip()
-        elif current_field == 'email':
-            document_data['customer_email'] = message.strip()
-    
-    # Remove current field from missing fields
-    if current_field in missing_fields:
-        missing_fields.remove(current_field)
-    
-    # Check if more fields are needed
-    if missing_fields:
-        next_field = missing_fields[0]
-        chat_memory.update_state(session_id, {
-            'flow_type': 'quotation',
-            'step': 'collecting_customer_details',
-            'document_data': document_data,
-            'missing_fields': missing_fields,
-            'current_field': next_field
-        })
-        
-        if next_field == 'gstin':
-            response = "🧾 **What is the GSTIN?**\n*(Type 'skip' to leave blank)*"
-        elif next_field == 'email':
-            response = "📧 **What is their email address?**\n*(Type 'skip' to leave blank)*"
-        else:
-            response = f"Please provide {next_field.replace('_', ' ')}:"
-        
+    except Exception as e:
+        print(f"Error in Phase 3 smart flow: {e}")
         return {
-            'response': response,
-            'type': 'customer_details_collection',
-            'data': document_data,
-            'show_skip_button': True
-        }
-    else:
-        # All customer details collected, move to terms & conditions
-        return check_terms_and_conditions(document_data, session_id)
-
-def handle_terms_collection(message, chat_state, session_id):
-    """Handle terms & conditions collection."""
-    document_data = chat_state.get('document_data', {})
-    terms_to_collect = chat_state.get('terms_to_collect', {})
-    current_term = chat_state.get('current_term')
-    
-    message_lower = message.lower().strip()
-    
-    # Handle default or skip
-    if message_lower in ['default', 'skip', '']:
-        value = 'Included'
-    else:
-        value = message.strip()
-    
-    # Store the term
-    if current_term == 'loading_charges':
-        document_data['loading_charges'] = value
-        terms_to_collect['loading_charges'] = False
-    elif current_term == 'transport_charges':
-        document_data['transport_charges'] = value
-        terms_to_collect['transport_charges'] = False
-    elif current_term == 'payment_terms':
-        document_data['payment_terms'] = value
-        terms_to_collect['payment_terms'] = False
-    
-    # Find next term to collect
-    next_term = None
-    for term, needed in terms_to_collect.items():
-        if needed:
-            next_term = term
-            break
-    
-    if next_term:
-        chat_memory.update_state(session_id, {
-            'flow_type': 'quotation',
-            'step': 'collecting_terms',
-            'document_data': document_data,
-            'terms_to_collect': terms_to_collect,
-            'current_term': next_term
-        })
-        
-        if next_term == 'transport_charges':
-            response = "🚚 **Transport Charges** (default: Included)\n"
-            response += "Please specify transport charges or click 'Use Default' for 'Included':"
-        elif next_term == 'payment_terms':
-            response = "💳 **Payment Terms** (default: Included)\n"
-            response += "Please specify payment terms or click 'Use Default' for 'Included':"
-        
-        return {
-            'response': response,
-            'type': 'terms_collection',
-            'data': document_data,
-            'show_skip_button': True,
-            'skip_button_text': 'Use Default'
-        }
-    else:
-        # All terms collected, show final confirmation
-        # Set defaults for any missing terms
-        if not document_data.get('loading_charges'):
-            document_data['loading_charges'] = 'Included'
-        if not document_data.get('transport_charges'):
-            document_data['transport_charges'] = 'Included'
-        if not document_data.get('payment_terms'):
-            document_data['payment_terms'] = 'Included'
-        
-        return show_final_confirmation(document_data, session_id)
-
-def handle_final_confirmation_response(message, chat_state, session_id):
-    """Handle final confirmation response."""
-    document_data = chat_state.get('document_data', {})
-    message_lower = message.lower().strip()
-    
-    if message_lower in ['generate', 'yes', 'y', 'generate pdf', 'create pdf']:
-        # Generate PDF
-        return {
-            'response': '🎉 Perfect! Generating your professional Proforma Invoice now...\n\n' +
-                       'Click the **Generate PDF** button below to create your document.',
-            'type': 'confirmation',
-            'data': document_data
-        }
-    elif message_lower in ['edit', 'modify', 'change']:
-        # Allow editing
-        return {
-            'response': '✏️ What would you like to edit? Please specify:\n\n' +
-                       '• Customer details (address, GSTIN, email)\n' +
-                       '• Product details (quantity, rate)\n' +
-                       '• Terms & conditions\n\n' +
-                       'Or provide the corrected information:',
-            'type': 'editing',
-            'data': document_data
-        }
-    elif message_lower in ['cancel', 'no', 'abort']:
-        # Cancel the process
-        chat_memory.clear_state(session_id)
-        return {
-            'response': '❌ Quotation cancelled. How can I help you next?',
-            'type': 'system'
-        }
-    else:
-        # Invalid response
-        return {
-            'response': '🤔 I didn\'t understand that. Please choose:\n\n' +
-                       '✅ **Yes, Generate** - Type "generate" or "yes"\n' +
-                       '✏️ **Edit** - Type "edit" to make changes\n' +
-                       '❌ **Cancel** - Type "cancel" to start over',
-            'type': 'final_confirmation',
-            'data': document_data
+            'response': f'❌ Sorry, I encountered an error: {str(e)}',
+            'type': 'error'
         }
 
-def start_po_flow(message, session_id):
-    """Start purchase order creation flow."""
-    # Try to extract data from the initial message
-    extracted_data = prompt_parser.extract_po_data(message)
-    
-    # Initialize chat state
-    chat_memory.update_state(session_id, {
-        'flow_type': 'purchase_order',
-        'step': 'collecting', 
-        'document_data': extracted_data if extracted_data else {},
-        'original_message': message
-    })
-    
-    if extracted_data and extracted_data.get('supplier_name'):
-        # We got some data, confirm and ask for missing pieces
-        missing_fields = prompt_parser.validate_po_data(extracted_data)
-        
-        if not missing_fields:
-            # All required data is present
-            return {
-                'response': format_po_confirmation(extracted_data),
-                'type': 'confirmation',
-                'data': extracted_data
-            }
-        else:
-            # Ask for missing data  
-            return {
-                'response': format_po_partial(extracted_data, missing_fields),
-                'type': 'partial',
-                'data': extracted_data
-            }
-    else:
-        # No usable data extracted, ask for basic info
-        return {
-            'response': '📦 I\'ll help you create a purchase order! Let me gather the details:\n\n' +
-                       '**Required Information:**\n' +
-                       '• Supplier name\n' +
-                       '• Items to purchase\n' +
-                       '• Quantities and specifications\n\n' +
-                       'Please provide the supplier name and items you want to order:',
-            'type': 'collection'
-        }
+# PHASE 4: REMOVED - Replaced by main.py smart flow
 
-def handle_ongoing_flow(message, chat_state, session_id):
-    """Handle ongoing data collection flows."""
-    flow_type = chat_state.get('flow_type')
-    document_data = chat_state.get('document_data', {})
-    
-    if flow_type == 'quotation':
-        return handle_quotation_collection(message, document_data, session_id)
-    elif flow_type == 'purchase_order':
-        return handle_po_collection(message, document_data, session_id)
-    else:
-        # Reset if unknown flow
-        chat_memory.clear_state(session_id)
-        return {
-            'response': '🔄 Something went wrong. Let\'s start over. How can I help you?',
-            'type': 'system'
-        }
+# PHASE 4: REMOVED - Replaced by main.py smart flow
+
+# PHASE 4: REMOVED - Replaced by main.py smart flow
+
+# PHASE 4: REMOVED - All complex functions replaced by main.py smart flow
+
+# PHASE 4: REMOVED - Complex FSM functions replaced by main.py smart flow
+
+# PHASE 4: REMOVED - Complex PO flow and ongoing flow functions replaced by main.py smart flow
 
 def handle_quotation_generation(quote_data, user_profile):
     """Enhanced quotation generation with steel calculations using PDF integration"""
@@ -950,42 +539,7 @@ def handle_template_generation(document_data, user_profile, document_type):
                 pdf_bytes = f.read()
             return pdf_path, pdf_bytes
 
-def handle_po_collection(message, document_data, session_id):
-    """Handle purchase order data collection."""
-    # Try to extract additional data from the message
-    new_data = prompt_parser.extract_po_data(message)
-    
-    # Merge with existing data
-    if new_data:
-        for key, value in new_data.items():
-            if value:  # Only update if new value is not empty
-                document_data[key] = value
-                
-    # Update the state with merged data
-    chat_memory.update_state(session_id, {
-        'flow_type': 'purchase_order',
-        'step': 'collecting',
-        'document_data': document_data
-    })
-    
-    # Check if we have all required data
-    missing_fields = prompt_parser.validate_po_data(document_data)
-    
-    if not missing_fields:
-        # All data collected, show confirmation
-        return {
-            'response': format_po_confirmation(document_data),
-            'type': 'confirmation', 
-            'data': document_data
-        }
-    else:
-        # Still missing data, ask for it
-        return {
-            'response': f'Thanks! I have some details. I still need:\n\n' +
-                       '\n'.join([f'• {field.replace("_", " ").title()}' for field in missing_fields]) +
-                       '\n\nPlease provide the missing information:',
-            'type': 'collection'
-        }
+# PHASE 4: REMOVED - Complex PO collection function replaced by main.py smart flow
 
 def format_quotation_confirmation(data):
     """Format quotation confirmation message."""
@@ -1135,6 +689,177 @@ def _get_items_summary(items):
         return f"{item.get('description', 'Item')} ({item.get('quantity', 'N/A')} {item.get('unit', 'nos')})"
     else:
         return f"{len(items)} items: {', '.join([item.get('description', 'Item')[:20] + ('...' if len(item.get('description', '')) > 20 else '') for item in items[:3]])}"
+
+# Phase 2: Helper functions for simplified quote draft state
+def get_conversation_context(session_id):
+    """Get conversation context for AI processing."""
+    chat_state = chat_memory.get_state(session_id)
+    conversation_history = chat_state.get('conversation_history', [])
+    return "\n".join(conversation_history[-3:]) if conversation_history else ""
+
+def update_conversation_context(session_id, message):
+    """Update conversation history."""
+    chat_state = chat_memory.get_state(session_id)
+    history = chat_state.get('conversation_history', [])
+    history.append(f"User: {message}")
+    
+    # Keep only last 10 messages
+    if len(history) > 10:
+        history = history[-10:]
+    
+    chat_memory.update_state(session_id, {'conversation_history': history})
+
+# PHASE 4: REMOVED - Complex response and field update functions replaced by main.py smart flow
+
+def handle_pdf_generation_request(session_id):
+    """Handle PDF generation request."""
+    
+    if not quote_draft_state.is_ready_for_pdf():
+        return {
+            'response': '⚠️ **Quote draft is not ready for PDF generation.**\n\n' + 
+                       quote_draft_state.get_summary() + 
+                       '\n\nPlease provide missing information first.',
+            'type': 'incomplete'
+        }
+    
+    # Store the PDF data in chat memory for the create-pdf endpoint
+    pdf_data = quote_draft_state.to_pdf_format()
+    chat_memory.update_state(session_id, {
+        'document_data': pdf_data,
+        'flow_type': 'quotation',
+        'step': 'final_confirmation'
+    })
+    
+    # Show final confirmation
+    response = "📋 **QUOTATION READY FOR GENERATION**\n\n"
+    response += f"**Customer:** {pdf_data.get('customer_name', 'N/A')}\n"
+    
+    if pdf_data.get('customer_address'):
+        response += f"**Address:** {pdf_data['customer_address']}\n"
+    if pdf_data.get('customer_gstin'):
+        response += f"**GSTIN:** {pdf_data['customer_gstin']}\n"
+    if pdf_data.get('customer_email'):
+        response += f"**Email:** {pdf_data['customer_email']}\n"
+    
+    response += "\n**📊 Items:**\n"
+    for i, item in enumerate(pdf_data.get('items', []), 1):
+        response += f"{i}. {item.get('description', 'Item')} - {item.get('quantity', 0)} kg @ ₹{item.get('rate', 0)}/kg = ₹{item.get('amount', 0):,.2f}\n"
+    
+    response += f"\n**Subtotal:** ₹{pdf_data.get('subtotal', 0):,.2f}\n"
+    response += f"**GST @18%:** ₹{pdf_data.get('gst_amount', 0):,.2f}\n"
+    response += f"**Grand Total:** ₹{pdf_data.get('grand_total', 0):,.2f}\n\n"
+    
+    response += "**Terms & Conditions:**\n"
+    response += f"• Loading Charges: {pdf_data.get('loading_charges', 'Included')}\n"
+    response += f"• Transport Charges: {pdf_data.get('transport_charges', 'Included')}\n"
+    response += f"• Payment Terms: {pdf_data.get('payment_terms', 'Included')}\n\n"
+    
+    response += "🎯 **Ready to generate PDF!** Click the 'Generate PDF' button below."
+    
+    return {
+        'response': response,
+        'type': 'final_confirmation',
+        'data': pdf_data
+    }
+
+# ✅ PHASE 5: Create PDF from Finalized Data
+def generate_pdf_from_finalized_data():
+    """
+    Phase 5: Create PDF from finalized quote data
+    Uses the smart state check from quote_brain.py
+    """
+    # ✅ Use the smart state check instead of basic check
+    if quote_draft_state.is_ready_for_pdf():
+        # render quotation_template.html
+        return generate_pdf(quote_draft_state)
+    else:
+        # ✅ Use smart error reporting
+        required_fields = ["customer_name", "quantity", "rate", "amount", "subtotal", "gst", "grand_total"]
+        missing_required = [f for f in required_fields if not quote_draft_state.state.get(f)]
+        
+        if missing_required:
+            return {
+                'success': False,
+                'message': f'❌ Still missing required fields: {", ".join(missing_required)}',
+                'type': 'incomplete'
+            }
+        
+        if quote_draft_state.state.get("missing_fields"):
+            return {
+                'success': False,
+                'message': f'❌ Still missing customer info: {", ".join(quote_draft_state.state["missing_fields"])}',
+                'type': 'incomplete'
+            }
+        
+        return {
+            'success': False,
+            'message': '❌ Quote draft is not ready for PDF generation. Please complete all required information.',
+            'type': 'incomplete'
+        }
+
+def generate_pdf(quote_state):
+    """
+    Generate PDF using quotation template with finalized data
+    Phase 5 implementation using HTML template rendering
+    """
+    try:
+        # Convert quote state to PDF format
+        pdf_data = quote_state.to_pdf_format()
+        
+        # Get user profile for PDF generation
+        user_id = session.get('user_id')
+        user_profile = auth_manager.get_user_profile(user_id) if user_id else {}
+        
+        if not user_profile:
+            return {
+                'success': False,
+                'message': 'User profile not found. Please complete your profile setup.',
+                'type': 'error'
+            }
+        
+        # Generate PDF using template-based generator
+        pdf_path, pdf_bytes = handle_template_generation(pdf_data, user_profile, 'quotation')
+        
+        # Generate document metadata
+        current_time = datetime.now()
+        doc_number = f"AIBA-Q-{current_time.strftime('%Y%m%d%H%M')}"
+        
+        # Save PDF to Firestore
+        document_metadata = {
+            'document_name': pdf_path,
+            'document_type': 'quotation',
+            'document_number': doc_number,
+            'customer_name': pdf_data.get('customer_name', 'Unknown Customer'),
+            'quote_number': doc_number,
+            'grand_total': float(pdf_data.get('grand_total', 0)),
+            'items_count': len(pdf_data.get('items', [])),
+            'file_path': pdf_path,
+            'customer_address': pdf_data.get('customer_address', ''),
+            'customer_email': pdf_data.get('customer_email', ''),
+            'customer_gstin': pdf_data.get('customer_gstin', ''),
+            'items_summary': _get_items_summary(pdf_data.get('items', [])),
+            'creation_source': 'aiba_phase5'
+        }
+        
+        doc_id = firestore_service.save_document(user_id, document_metadata, pdf_bytes)
+        
+        # Reset quote state after successful PDF generation
+        quote_state.reset()
+        
+        return {
+            'success': True,
+            'pdf_path': pdf_path,
+            'document_id': doc_id,
+            'message': f'✅ Phase 5: Professional Quotation PDF created successfully!',
+            'type': 'pdf_generated'
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'message': f'❌ Phase 5 PDF generation failed: {str(e)}',
+            'type': 'error'
+        }
 
 if __name__ == '__main__':
     # Ensure data directory exists

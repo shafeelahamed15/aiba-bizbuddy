@@ -57,11 +57,14 @@
                     <button class="quick-btn" onclick="insertQuickText('Create a quotation')">
                         📋 Quote
                     </button>
-                    <button class="quick-btn" onclick="insertQuickText('Create a purchase order')">
-                        📦 PO
+                    <button class="quick-btn" onclick="insertQuickText('use defaults')">
+                        🚀 Use Defaults
                     </button>
-                    <button class="quick-btn" onclick="insertQuickText('Help')">
-                        💡 Help
+                    <button class="quick-btn" onclick="insertQuickText('skip all')">
+                        ⏭️ Skip All
+                    </button>
+                    <button class="quick-btn" onclick="insertQuickText('generate')">
+                        📄 Generate
                     </button>
                     <button class="quick-btn settings-btn" onclick="window.location.href='/settings'">
                         ⚙️ Settings
@@ -228,6 +231,9 @@
                 } else if (data.show_skip_button) {
                     // Add skip button for customer details or terms collection
                     addSkipButton(data.skip_button_text || 'Skip');
+                } else if (data.show_generate_button) {
+                    // Add generate PDF button
+                    addGenerateButton();
                 }
 
             } catch (error) {
@@ -307,6 +313,21 @@
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
+        function addGenerateButton() {
+            const messagesContainer = document.getElementById('chatMessages');
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'message-actions generate-actions';
+
+            actionsDiv.innerHTML = `
+                <button class="action-btn primary generate-btn" onclick="generatePDFDirectly()">
+                    📄 Generate PDF
+                </button>
+            `;
+
+            messagesContainer.appendChild(actionsDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
         function skipField() {
             // Remove skip button
             const actions = document.querySelector('.skip-actions');
@@ -353,12 +374,92 @@
                 } else if (data.show_skip_button) {
                     // Add skip button for next field
                     addSkipButton(data.skip_button_text || 'Skip');
+                } else if (data.show_generate_button) {
+                    // Add generate PDF button
+                    addGenerateButton();
                 }
 
             } catch (error) {
                 showLoading(false);
                 addMessage('bot', '❌ Sorry, I encountered an error. Please try again.', 'error');
             }
+        }
+
+        async function generatePDFDirectly() {
+            // Remove generate button
+            const actions = document.querySelector('.generate-actions');
+            if (actions) actions.remove();
+
+            showLoading(true, 'Generating PDF...');
+
+            try {
+                const response = await fetch('/phase5-pdf', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: sessionId
+                    })
+                });
+
+                const data = await response.json();
+                
+                showLoading(false);
+
+                if (data.success) {
+                    // Add success message with download link
+                    addMessage('bot', data.message, 'success');
+                    
+                    // Add download button
+                    addDownloadButton(data.pdf_path, data.document_id);
+                    
+                    showToast('PDF generated successfully!', 'success');
+                } else {
+                    addMessage('bot', data.message, 'error');
+                    showToast('Failed to generate PDF', 'error');
+                }
+
+            } catch (error) {
+                showLoading(false);
+                addMessage('bot', '❌ Sorry, I encountered an error generating the PDF.', 'error');
+                showToast('Connection error. Please try again.', 'error');
+            }
+        }
+
+        function addDownloadButton(pdfPath, documentId) {
+            const messagesContainer = document.getElementById('chatMessages');
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'message-actions download-actions';
+
+            actionsDiv.innerHTML = `
+                <button class="action-btn primary download-btn" onclick="downloadPDF('${pdfPath}')">
+                    ⬇️ Download PDF
+                </button>
+                <button class="action-btn secondary view-btn" onclick="viewPDF('${documentId}')">
+                    👁️ View PDF
+                </button>
+            `;
+
+            messagesContainer.appendChild(actionsDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function downloadPDF(pdfPath) {
+            // Create a temporary link and click it to download
+            const link = document.createElement('a');
+            link.href = `/download/${pdfPath}`;
+            link.download = pdfPath;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            showToast('Download started!', 'success');
+        }
+
+        function viewPDF(documentId) {
+            // Open PDF in new tab for viewing
+            window.open(`/documents/${documentId}`, '_blank');
         }
 
         function confirmDocument() {
