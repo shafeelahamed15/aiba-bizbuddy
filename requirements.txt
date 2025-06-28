@@ -9,5 +9,6 @@ google-auth-oauthlib==1.1.0
 google-auth-httplib2==0.1.1
 requests==2.31.0
 firebase-admin==6.9.0
-google-cloud-firestore==2.11.1
-openai==1.88.0 
+google-cloud-firestore>=2.19.0
+openai>=1.88.0
+fpdf2>=2.8.0 
