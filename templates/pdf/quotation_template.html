@@ -26,22 +26,18 @@
             letter-spacing: 1px;
         }
         
-        .from-to-section {
+        .from-section, .to-section {
             margin: 30px 0;
         }
         
-        .from-section, .to-section {
-            margin-bottom: 25px;
-        }
-        
-        .section-label {
+        .from-title, .to-title {
             font-weight: bold;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
             font-size: 12px;
         }
         
-        .company-details {
-            line-height: 1.5;
+        .from-details, .to-details {
+            line-height: 1.6;
         }
         
         .items-table {
@@ -113,25 +109,23 @@
         <h1>PROFORMA INVOICE</h1>
     </div>
 
-    <div class="from-to-section">
-        <div class="from-section">
-            <div class="section-label">From:</div>
-            <div class="company-details">
-                {{ seller.name }}<br>
-                {{ seller.address }}<br>
-                GSTIN: {{ seller.gstin }}<br>
-                Email: {{ seller.email }}
-            </div>
+    <div class="from-section">
+        <div class="from-title">From:</div>
+        <div class="from-details">
+            {{ seller.name }}<br>
+            {{ seller.address }}<br>
+            GSTIN: {{ seller.gstin }}<br>
+            Email: {{ seller.email }}
         </div>
+    </div>
 
-        <div class="to-section">
-            <div class="section-label">To:</div>
-            <div class="company-details">
-                {{ buyer.name }}<br>
-                {{ buyer.address }}<br>
-                GSTIN: {{ buyer.gstin }}<br>
-                Email: {{ buyer.email }}
-            </div>
+    <div class="to-section">
+        <div class="to-title">To:</div>
+        <div class="to-details">
+            {{ buyer.name }}<br>
+            {{ buyer.address }}<br>
+            GSTIN: {{ buyer.gstin }}<br>
+            Email: {{ buyer.email }}
         </div>
     </div>
 
