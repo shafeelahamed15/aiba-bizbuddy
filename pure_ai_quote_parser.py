@@ -13,6 +13,7 @@ Return structured JSON with:
 - items: [{description, quantity (kg), rate, amount}]
 - subtotal, gst, grand_total
 - missing_fields: list of any missing: address, gstin, email
+- terms: {loading_charges, transport_charges, payment_terms} (only if mentioned)
 
 CALCULATIONS:
 - Convert all quantities to kg (1 MT = 1000 kg)
@@ -23,6 +24,20 @@ CALCULATIONS:
 
 STEEL WEIGHTS:
 Use (thickness × width × length × 7.85 × nos / 1,000,000) for steel plate weight.
+
+TERMS EXTRACTION:
+- Only include "terms" field if loading/transport/payment are explicitly mentioned
+- Examples: "loading included" → "loading_charges": "Included"
+- Examples: "transport extra" → "transport_charges": "Extra"
+- Examples: "advance payment" → "payment_terms": "Advance"
+- If not mentioned, don't include terms field
+
+EXAMPLES:
+Input: "Quote for ABC Company - 5 MT ISMC at ₹56/kg with loading included"
+Output: {"customer_name": "ABC Company", "items": [...], "terms": {"loading_charges": "Included"}}
+
+Input: "10 tons steel for XYZ Ltd, transport by customer, advance payment required"
+Output: {"customer_name": "XYZ Ltd", "items": [...], "terms": {"transport_charges": "By Customer", "payment_terms": "Advance Required"}}
 
 ALWAYS include ALL calculated fields in your response.
 """
