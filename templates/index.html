@@ -476,8 +476,107 @@
             const actions = document.querySelector('.message-actions');
             if (actions) actions.remove();
 
-            // Add message asking what to edit
-            addMessage('bot', '✏️ What would you like to edit? You can say things like:<br>• "Change customer name to XYZ"<br>• "Add another item"<br>• "Update the rate"<br>• "Change transport terms"', 'question');
+            // Show edit options as buttons
+            addEditOptions();
+        }
+
+        function addEditOptions() {
+            const messagesContainer = document.getElementById('chatMessages');
+            const editDiv = document.createElement('div');
+            editDiv.className = 'message-actions edit-options';
+
+            editDiv.innerHTML = `
+                <div class="edit-title">✏️ What needs changing?</div>
+                <div class="edit-buttons">
+                    <button class="action-btn edit-option" onclick="editField('customer_name')">
+                        👤 Customer details
+                    </button>
+                    <button class="action-btn edit-option" onclick="editField('items')">
+                        📦 Items/Pricing
+                    </button>
+                    <button class="action-btn edit-option" onclick="editField('terms')">
+                        📋 Terms
+                    </button>
+                    <button class="action-btn secondary" onclick="cancelEdit()">
+                        ❌ Cancel
+                    </button>
+                </div>
+            `;
+
+            messagesContainer.appendChild(editDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function editField(fieldType) {
+            // Remove edit options
+            const editOptions = document.querySelector('.edit-options');
+            if (editOptions) editOptions.remove();
+
+            let message = '';
+            switch(fieldType) {
+                case 'customer_name':
+                    message = 'Please provide the updated customer details (name, address, GSTIN, email)';
+                    break;
+                case 'items':
+                    message = 'Please provide the updated items and pricing information';
+                    break;
+                case 'terms':
+                    message = 'Please specify the updated terms & conditions (loading, transport, payment)';
+                    break;
+            }
+            
+            // Send the edit request as a regular message
+            sendEditMessage(message);
+        }
+
+        function cancelEdit() {
+            // Remove edit options and restore original buttons
+            const editOptions = document.querySelector('.edit-options');
+            if (editOptions) editOptions.remove();
+            
+            // Re-add the original action buttons
+            addActionButtons();
+        }
+
+        async function sendEditMessage(message) {
+            // Add user message
+            addMessage('user', message);
+            
+            // Show loading
+            showLoading(true);
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        session_id: sessionId
+                    })
+                });
+
+                const data = await response.json();
+                
+                // Hide loading
+                showLoading(false);
+
+                // Add bot response
+                addMessage('bot', data.response, data.type);
+
+                // Handle response types
+                if (data.show_generate_button) {
+                    addGenerateButton();
+                } else if (data.type === 'confirmation' && data.data) {
+                    currentDocumentData = data.data;
+                    addActionButtons();
+                }
+
+            } catch (error) {
+                showLoading(false);
+                addMessage('bot', '❌ Sorry, I encountered an error. Please try again.', 'error');
+            }
         }
 
         async function generatePDF() {
