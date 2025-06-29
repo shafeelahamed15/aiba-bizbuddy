@@ -40,27 +40,12 @@ def handle_user_input(user_input):
     
     # ✅ CONVENIENT BULK COMMANDS
     if user_input_lower in ['use defaults', 'default']:
-        # Fill missing customer fields with defaults
-        missing_customer_fields = quote_draft_state.get_missing_customer_fields()
-        for field in missing_customer_fields:
-            if field == 'address':
-                quote_draft_state.update_customer_detail(field, 'As per customer records')
-            elif field == 'gstin':
-                quote_draft_state.update_customer_detail(field, 'As per customer records')
-            elif field == 'email':
-                quote_draft_state.update_customer_detail(field, 'As per customer records')
+        # Set default terms if needed
+        for term in ['loading', 'transport', 'payment']:
+            if not quote_draft_state.state['terms'].get(term):
+                quote_draft_state.update_term(term, 'Included')
         
-        return f"✅ **Default values applied!**\n\n{get_current_status()}\n\n💬 Type 'generate' to create PDF or provide any corrections."
-    
-    if user_input_lower in ['skip all', 'skip everything']:
-        # Clear all missing fields
-        quote_draft_state.state['missing_fields'] = []
-        # Set empty values for customer details
-        for field in ['address', 'gstin', 'email']:
-            if not quote_draft_state.state['customer_details'].get(field):
-                quote_draft_state.update_customer_detail(field, '')
-        
-        return f"✅ **All fields skipped!**\n\n{get_current_status()}\n\n💬 Type 'generate' to create PDF."
+        return f"✅ **Default terms applied!**\n\n{get_current_status()}\n\n💬 Type 'generate' to create PDF or provide any corrections."
     
     if user_input_lower in ['standard terms', 'default terms']:
         # Set all terms to "Included"
@@ -70,40 +55,17 @@ def handle_user_input(user_input):
         return f"✅ **Standard terms applied!**\n\n{get_current_status()}\n\n💬 Type 'generate' to create PDF."
     
     if user_input_lower == 'manual':
-        # Switch to manual field-by-field collection
-        missing_customer_fields = quote_draft_state.get_missing_customer_fields()
-        if missing_customer_fields:
-            field = missing_customer_fields[0]
-            current_asking_field = field
-            field_prompts = {
-                'address': '📍 What is the customer\'s full address?',
-                'gstin': '🏢 What is the customer\'s GSTIN number?',
-                'email': '📧 What is the customer\'s email address?'
-            }
-            
-            status = get_current_status()
-            prompt = field_prompts.get(field, f'Please provide {field}:')
-            
-            return f"{status}\n\n{prompt}\n*(Type 'skip' to leave blank)*"
-        
-        return f"✅ **No missing fields to collect manually!**\n\n{get_current_status()}\n\n💬 Type 'generate' to create PDF."
+        # Customer details are optional now, just show current status
+        return f"✅ **Quote ready!**\n\n{get_current_status()}\n\n💬 Type 'generate' to create PDF or add more details."
     
     if user_input_lower in ['generate', 'create pdf', 'yes']:
-        # ✅ Auto-complete missing fields before generation
-        missing_customer_fields = quote_draft_state.get_missing_customer_fields()
-        if missing_customer_fields:
-            # Auto-skip missing customer fields
-            quote_draft_state.state['missing_fields'] = []
-            for field in missing_customer_fields:
-                quote_draft_state.update_customer_detail(field, '')
-        
-        # Auto-set missing terms
+        # Auto-set missing terms to defaults
         terms_fields = ["loading", "transport", "payment"]
         for term_field in terms_fields:
             if not quote_draft_state.state["terms"].get(term_field):
                 quote_draft_state.update_term(term_field, 'Included')
         
-        # ✅ Smart confirmation with detailed check
+        # Check required fields for quotation
         required_fields = ["customer_name", "quantity", "rate", "amount", "subtotal", "gst", "grand_total"]
         missing_required = [f for f in required_fields if not quote_draft_state.state.get(f)]
         
@@ -116,158 +78,97 @@ def handle_user_input(user_input):
         else:
             return f"⚠️ **Not ready yet!**\n\n{get_current_status()}"
     
-    # 🔧 Handle SKIP for missing fields
+    # 🔧 Handle SKIP - simplified since customer fields are optional
     if user_input_lower == 'skip' and current_asking_field:
-        # Handle terms fields differently
+        # Handle terms fields
         if current_asking_field.startswith('terms_'):
             term_type = current_asking_field.replace('terms_', '')
             quote_draft_state.update_term(term_type, 'Included')
-        else:
-            # Skip the current field by removing it from missing_fields
-            if current_asking_field in quote_draft_state.state['missing_fields']:
-                quote_draft_state.state['missing_fields'].remove(current_asking_field)
-            
-            # Set empty value for the skipped field
-            quote_draft_state.update_customer_detail(current_asking_field, '')
         
         current_asking_field = None
         
-        # Check what's next
-        missing_customer_fields = quote_draft_state.get_missing_customer_fields()
+        # Check for remaining terms that need setting
+        terms_fields = ["loading", "transport", "payment"]
+        for term_field in terms_fields:
+            if not quote_draft_state.state["terms"].get(term_field):
+                current_asking_field = f"terms_{term_field}"
+                term_prompts = {
+                    'loading': '🚛 Loading charges (e.g., "Included", "₹500 extra", "As per actual")?',
+                    'transport': '🚚 Transport charges (e.g., "Included", "₹2000 extra", "FOB")?',
+                    'payment': '💳 Payment terms (e.g., "Advance", "30 days credit", "Against delivery")?'
+                }
+                
+                status = get_current_status()
+                prompt = term_prompts.get(term_field, f'Please specify {term_field} terms:')
+                
+                return f"✅ **Field skipped!**\n\n{status}\n\n{prompt}\n*(Type 'skip' for 'Included')*"
         
-        if missing_customer_fields:
-            # Ask for next missing field
-            next_field = missing_customer_fields[0]
-            current_asking_field = next_field
-            field_prompts = {
-                'address': '📍 What is the customer\'s full address?',
-                'gstin': '🏢 What is the customer\'s GSTIN number?',
-                'email': '📧 What is the customer\'s email address?'
-            }
-            
-            status = get_current_status()
-            prompt = field_prompts.get(next_field, f'Please provide {next_field}:')
-            
-            return f"✅ **Field skipped!**\n\n{status}\n\n{prompt}\n*(Type 'skip' to leave blank)*"
-        else:
-            # All customer fields handled - check for terms
-            terms_fields = ["loading", "transport", "payment"]
-            for term_field in terms_fields:
-                if not quote_draft_state.state["terms"].get(term_field):
-                    current_asking_field = f"terms_{term_field}"
-                    term_prompts = {
-                        'loading': '🚛 Loading charges (e.g., "Included", "₹500 extra", "As per actual")?',
-                        'transport': '🚚 Transport charges (e.g., "Included", "₹2000 extra", "FOB")?',
-                        'payment': '💳 Payment terms (e.g., "Advance", "30 days credit", "Against delivery")?'
-                    }
-                    
-                    status = get_current_status()
-                    prompt = term_prompts.get(term_field, f'Please specify {term_field} terms:')
-                    
-                    return f"✅ **Field skipped!**\n\n{status}\n\n{prompt}\n*(Type 'skip' for 'Included')*"
-            
-            # All fields handled - check if ready for PDF
-            if quote_draft_state.is_ready_for_pdf():
-                return f"""
+        # All terms handled - ready for PDF
+        if quote_draft_state.is_ready_for_pdf():
+            return f"""
 ✅ **All information collected!**
 
 {get_current_status()}
 
 🎯 **Ready to generate PDF!** Type 'generate' to create your quotation.
-                """
-            else:
-                return f"""
+            """
+        else:
+            return f"""
 📝 **Quote updated!**
 
 {get_current_status()}
 
 💬 **Please provide any additional details or type 'generate' if ready.**
-                """
+            """
     
-    # 🔧 Handle responses to missing field questions
+    # 🔧 Handle responses to terms field questions
     if current_asking_field and user_input_lower not in ['skip']:
-        # Handle terms fields differently
+        # Handle terms fields
         if current_asking_field.startswith('terms_'):
             term_type = current_asking_field.replace('terms_', '')
             quote_draft_state.update_term(term_type, user_input)
-        else:
-            # User is responding to a specific field question
-            quote_draft_state.update_customer_detail(current_asking_field, user_input)
         
         current_asking_field = None
         
-        # Check what's next
-        missing_customer_fields = quote_draft_state.get_missing_customer_fields()
+        # Check for remaining terms
+        terms_fields = ["loading", "transport", "payment"]
+        for term_field in terms_fields:
+            if not quote_draft_state.state["terms"].get(term_field):
+                current_asking_field = f"terms_{term_field}"
+                term_prompts = {
+                    'loading': '🚛 Loading charges (e.g., "Included", "₹500 extra", "As per actual")?',
+                    'transport': '🚚 Transport charges (e.g., "Included", "₹2000 extra", "FOB")?',
+                    'payment': '💳 Payment terms (e.g., "Advance", "30 days credit", "Against delivery")?'
+                }
+                
+                status = get_current_status()
+                prompt = term_prompts.get(term_field, f'Please specify {term_field} terms:')
+                
+                return f"✅ **Field updated!**\n\n{status}\n\n{prompt}\n*(Type 'skip' for 'Included')*"
         
-        if missing_customer_fields:
-            # Ask for next missing field
-            next_field = missing_customer_fields[0]
-            current_asking_field = next_field
-            field_prompts = {
-                'address': '📍 What is the customer\'s full address?',
-                'gstin': '🏢 What is the customer\'s GSTIN number?',
-                'email': '📧 What is the customer\'s email address?'
-            }
-            
-            status = get_current_status()
-            prompt = field_prompts.get(next_field, f'Please provide {next_field}:')
-            
-            return f"✅ **Field updated!**\n\n{status}\n\n{prompt}\n*(Type 'skip' to leave blank)*"
-        else:
-            # All customer fields handled - check for terms
-            terms_fields = ["loading", "transport", "payment"]
-            for term_field in terms_fields:
-                if not quote_draft_state.state["terms"].get(term_field):
-                    current_asking_field = f"terms_{term_field}"
-                    term_prompts = {
-                        'loading': '🚛 Loading charges (e.g., "Included", "₹500 extra", "As per actual")?',
-                        'transport': '🚚 Transport charges (e.g., "Included", "₹2000 extra", "FOB")?',
-                        'payment': '💳 Payment terms (e.g., "Advance", "30 days credit", "Against delivery")?'
-                    }
-                    
-                    status = get_current_status()
-                    prompt = term_prompts.get(term_field, f'Please specify {term_field} terms:')
-                    
-                    return f"✅ **Field updated!**\n\n{status}\n\n{prompt}\n*(Type 'skip' for 'Included')*"
-            
-            # All fields handled - check if ready for PDF
-            if quote_draft_state.is_ready_for_pdf():
-                return f"""
+        # All terms handled - ready for PDF
+        if quote_draft_state.is_ready_for_pdf():
+            return f"""
 ✅ **All information collected!**
 
 {get_current_status()}
 
 🎯 **Ready to generate PDF!** Type 'generate' to create your quotation.
-                """
-            else:
-                return f"""
+            """
+        else:
+            return f"""
 📝 **Quote updated!**
 
 {get_current_status()}
 
 💬 **Please provide any additional details or type 'generate' if ready.**
-                """
+            """
     
     # Main AI processing for new quote requests
     ai_data = extract_quote_fields(user_input)
     quote_draft_state.update_from_ai_extraction(ai_data)
     
-    # ✅ CONVENIENT BULK HANDLING - Offer quick completion options
-    missing_customer_fields = quote_draft_state.get_missing_customer_fields()
-    
-    if missing_customer_fields:
-        status = get_current_status()
-        
-        return f"""{status}
-
-🚀 **Quick Options:**
-• Type **'use defaults'** - Fill with standard defaults
-• Type **'skip all'** - Skip all missing fields  
-• Type **'manual'** - Fill fields one by one
-• Or provide customer details in one message
-
-**Missing:** {', '.join(missing_customer_fields)}
-        """
+    # Check if we have the basic required info for quotation
     
     # Check if terms need to be set
     terms_fields = ["loading", "transport", "payment"]
@@ -341,10 +242,7 @@ def get_current_status():
         if customer_details.get('email'):
             status += f"• Email: {customer_details['email']}\n"
     
-    # Show missing fields
-    missing = quote_draft_state.get_missing_customer_fields()
-    if missing:
-        status += f"\n**Missing:** {', '.join(missing)}"
+    # Customer details are optional - no need to show as missing
     
     return status
 
@@ -389,38 +287,22 @@ def generate_pdf_response():
     return response
 
 def handle_field_update(field, value):
-    """Handle updating a specific customer field."""
+    """Handle updating a specific customer field (now optional)."""
     
     if value.lower().strip() == 'skip':
         value = ''
     
     quote_draft_state.update_customer_detail(field, value)
     
-    # Check what's needed next
-    missing = quote_draft_state.get_missing_customer_fields()
-    
-    if missing:
-        next_field = missing[0]
-        field_prompts = {
-            'address': '📍 What is the customer\'s full address?',
-            'gstin': '🏢 What is the customer\'s GSTIN number?',
-            'email': '📧 What is the customer\'s email address?'
-        }
-        
-        status = get_current_status()
-        prompt = field_prompts.get(next_field, f'Please provide {next_field}:')
-        
-        return f"✅ **{field.title()} updated!**\n\n{status}\n\n{prompt}\n*(Type 'skip' to leave blank)*"
-    
-    elif quote_draft_state.is_ready_for_pdf():
+    # Customer fields are optional now - just show status
+    if quote_draft_state.is_ready_for_pdf():
         return f"""
-✅ **All information collected!**
+✅ **{field.title()} updated!**
 
 {get_current_status()}
 
 🎯 **Ready to generate PDF!** Type 'generate' to create your quotation.
         """
-    
     else:
         return f"""
 ✅ **{field.title()} updated!**
@@ -480,7 +362,7 @@ def demo():
         'amount': 280000.0,
         'gst_amount': 50400.0,
         'grand_total': 330400.0,
-        'missing_fields': ['address', 'gstin', 'email'],
+        'missing_fields': [],
         'confidence': 0.95,
         'items': [{
             'description': 'ISMC 100x50 (5 MT)',

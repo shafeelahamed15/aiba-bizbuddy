@@ -157,17 +157,9 @@ class QuoteDraftState:
             if field in self.state['missing_fields']:
                 self.state['missing_fields'].remove(field)
             
-            # ✅ Final Guard: If all customer fields are now filled, clear missing_fields
-            customer_fields_complete = all([
-                self.state['customer_details'].get('address'),
-                self.state['customer_details'].get('gstin'), 
-                self.state['customer_details'].get('email')
-            ])
-            
-            if customer_fields_complete:
-                # Clear any remaining customer-related missing fields
-                self.state['missing_fields'] = [f for f in self.state['missing_fields'] 
-                                              if f not in ['address', 'gstin', 'email']]
+            # ✅ Customer fields are optional - always clear them from missing_fields
+            self.state['missing_fields'] = [f for f in self.state['missing_fields'] 
+                                          if f not in ['address', 'gstin', 'email']]
         
         self.state['last_updated'] = datetime.now().isoformat()
         self._update_status()
@@ -280,28 +272,18 @@ class QuoteDraftState:
         if not any(self.state.get(field) for field in required_fields):
             self.state['status'] = 'empty'
         elif all(self.state.get(field) for field in required_fields):
-            # ✅ Smart status update: Check if all customer fields are actually filled
-            customer_fields_complete = all([
-                self.state['customer_details'].get('address'),
-                self.state['customer_details'].get('gstin'), 
-                self.state['customer_details'].get('email')
-            ])
-            
-            if customer_fields_complete:
-                # ✅ All customer data present - clear missing_fields and set to ready
-                self.state['missing_fields'] = []
-                self.state['status'] = 'ready'
-            elif not self.state['missing_fields']:
-                self.state['status'] = 'ready'
-            else:
-                self.state['status'] = 'complete'
+            # ✅ Set to ready - customer details (address, gstin, email) are optional
+            self.state['status'] = 'ready'
+            # Clear any customer detail fields from missing_fields as they're not required
+            self.state['missing_fields'] = [f for f in self.state['missing_fields'] 
+                                          if f not in ['address', 'gstin', 'email']]
         else:
             self.state['status'] = 'partial'
     
     def get_missing_customer_fields(self):
-        """Get list of missing customer fields"""
-        return [field for field in self.state['missing_fields'] 
-                if field in ['address', 'gstin', 'email']]
+        """Get list of missing customer fields - returns empty since address/gstin/email are optional"""
+        # Customer details are optional for Tally integration - don't return them as missing
+        return []
     
     def is_ready_for_pdf(self):
         """Check if state is ready for PDF generation"""
@@ -312,14 +294,17 @@ class QuoteDraftState:
         if missing_required:
             return False
         
-        # ✅ Check if missing_fields list is empty (all customer info collected)
-        if self.state.get("missing_fields"):
+        # ✅ Filter out customer details from missing_fields as they're optional
+        essential_missing = [f for f in self.state.get("missing_fields", []) 
+                           if f not in ['address', 'gstin', 'email']]
+        
+        if essential_missing:
             return False
         
         # ✅ Ensure terms have defaults before declaring ready
         self.ensure_terms_defaults()
             
-        # ✅ All required data present and no missing fields - ready for PDF!
+        # ✅ All required data present and no essential missing fields - ready for PDF!
         return True
     
     def to_pdf_format(self):
@@ -420,7 +405,7 @@ REQUIRED JSON OUTPUT:
     "gst_rate": 18,
     "gst_amount": 50400.0,
     "grand_total": 330400.0,
-    "missing_fields": ["address", "gstin", "email"],
+    "missing_fields": [],
     "confidence": 0.95,
     "intent": "quotation",
     "items": [
@@ -440,13 +425,13 @@ REQUIRED JSON OUTPUT:
 
 EXAMPLES:
 Input: "Quote for ABC Company – 5 MT ISMC 100x50 at ₹56/kg"
-Output: {"success": true, "customer_name": "ABC Company", "material_description": "ISMC 100x50 (5 MT)", "quantity": 5000, "rate": 56.0, "amount": 280000.0, "gst_amount": 50400.0, "grand_total": 330400.0, "missing_fields": ["address", "gstin", "email"]}
+Output: {"success": true, "customer_name": "ABC Company", "material_description": "ISMC 100x50 (5 MT)", "quantity": 5000, "rate": 56.0, "amount": 280000.0, "gst_amount": 50400.0, "grand_total": 330400.0, "missing_fields": []}
 
 Input: "Need 10 tons steel angles for XYZ Ltd with loading included"
-Output: {"success": true, "customer_name": "XYZ Ltd", "material_description": "steel angles (10 TON)", "quantity": 10000, "rate": null, "missing_fields": ["address", "gstin", "email", "rate"], "terms": {"loading_charges": "Included", "transport_charges": null, "payment_terms": null}}
+Output: {"success": true, "customer_name": "XYZ Ltd", "material_description": "steel angles (10 TON)", "quantity": 10000, "rate": null, "missing_fields": ["rate"], "terms": {"loading_charges": "Included", "transport_charges": null, "payment_terms": null}}
 
 Input: "Need 10 tons steel angles for XYZ Ltd"
-Output: {"success": true, "customer_name": "XYZ Ltd", "material_description": "steel angles (10 TON)", "quantity": 10000, "rate": null, "missing_fields": ["address", "gstin", "email", "rate"]}
+Output: {"success": true, "customer_name": "XYZ Ltd", "material_description": "steel angles (10 TON)", "quantity": 10000, "rate": null, "missing_fields": ["rate"]}
 
 Input: "create a quotation for Dee Dee Engineering Enterprises E46, Developed Plots Estate Thuvakudy, Trichy - 620015 ddengg1@gmail.com Info@ddengg.in ---GST : 33AADFD0235D1ZA------10x1250x6300- 4nos @84 12x1250×2500 - 2 nos @84 SA 515 Grade 70 10x1500x3500 - 1 nos @105 12x1500x1250 - 1 nos @105 (Sail Hard Plate - Material Description)"
 Output: {"success": true, "customer_name": "Dee Dee Engineering Enterprises", "customer_address": "E46, Developed Plots Estate Thuvakudy, Trichy - 620015", "customer_email": "ddengg1@gmail.com, Info@ddengg.in", "customer_gstin": "33AADFD0235D1ZA", "items": [{"description": "10mm x 1250 x 6300 - 4 Nos (Sail Hard Plate)", "quantity": 393.75, "rate": 84.0, "amount": 33075.00}, {"description": "12mm x 1250 x 2500 - 2 Nos (Sail Hard Plate)", "quantity": 147.19, "rate": 84.0, "amount": 12363.96}, {"description": "10mm x 1500 x 3500 - 1 Nos (SA 515 Grade 70)", "quantity": 412.69, "rate": 105.0, "amount": 43332.45}, {"description": "12mm x 1500 x 1250 - 1 Nos (SA 515 Grade 70)", "quantity": 176.44, "rate": 105.0, "amount": 18526.20}], "subtotal": 107297.61, "gst_amount": 19313.57, "grand_total": 126611.18, "missing_fields": [], "terms": {"loading": "Included", "transport": "Included", "payment": "Included"}}
@@ -505,7 +490,7 @@ IMPORTANT:
             'subtotal': 0,
             'gst': 0,
             'grand_total': 0,
-            'missing_fields': ['address', 'gstin', 'email'],
+            'missing_fields': [],
             'confidence': 0.1,
             'extraction_method': 'ai_failed',
             'original_input': user_input
